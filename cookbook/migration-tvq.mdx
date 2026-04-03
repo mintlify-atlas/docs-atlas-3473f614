@@ -1,0 +1,338 @@
+---
+title: "Migrating from TanStack Vue Query"
+description: "Step-by-step guide to migrating from @tanstack/vue-query to @pinia/colada, including API differences, concept mapping, and the TanStack compatibility plugin."
+---
+
+Pinia Colada and TanStack Vue Query have similar function names and API options, so migration is mostly a matter of updating imports and adjusting a few option names. This guide covers what changes and what stays the same.
+
+<Note>
+  This guide is a work in progress. If you encounter something not covered here, please [open a pull request](https://github.com/posva/pinia-colada) to improve it.
+</Note>
+
+## Concept mapping
+
+| TanStack Vue Query           | Pinia Colada              | Notes                                            |
+| ---------------------------- | ------------------------- | ------------------------------------------------ |
+| `QueryClient`                | `PiniaColada` plugin      | Installed via `app.use(PiniaColada)`             |
+| `VueQueryPlugin`             | `PiniaColada`             | Same role, different name                        |
+| `queryKey`                   | `key`                     | Same purpose                                     |
+| `queryFn`                    | `query`                   | Same purpose                                     |
+| `mutationFn`                 | `mutation`                | Same purpose                                     |
+| `fetchStatus`                | `asyncStatus`             | Values differ: `'fetching'` → `'loading'`        |
+| `status: 'loading'`          | `status: 'pending'`       | Initial state name                               |
+| `isLoading`                  | `isPending`               | Queries only                                     |
+| `queryOptions()`             | `defineQueryOptions()`    | See [reusable queries](#reusable-queries)        |
+| `useIsFetching()`            | `useQueryCache()` + computed | See [missing utilities](#missing-utilities)   |
+| `useIsMutating()`            | `useMutationCache()` + computed | See [missing utilities](#missing-utilities) |
+
+## Step-by-step migration
+
+<Steps>
+  <Step title="Install Pinia Colada">
+    ```bash
+    npm install @pinia/colada
+    ```
+
+    Then replace `VueQueryPlugin` with `PiniaColada` when installing your app:
+
+    ```ts
+    import { VueQueryPlugin } from '@tanstack/vue-query' // [!code --]
+    import { PiniaColada } from '@pinia/colada' // [!code ++]
+
+    app.use(VueQueryPlugin) // [!code --]
+    app.use(PiniaColada) // [!code ++]
+    ```
+
+    <Note>
+      Pinia Colada requires Pinia. Make sure you call `app.use(createPinia())` before `app.use(PiniaColada)`.
+    </Note>
+  </Step>
+  <Step title="Update option names in useQuery">
+    Rename `queryKey` → `key` and `queryFn` → `query`:
+
+    ```ts
+    useQuery({
+      queryKey: ['todos', { page: computed(() => route.query.id) }], // [!code --]
+      queryFn: fetchTodos, // [!code --]
+      key: () => ['todos', { page: route.query.page }], // [!code ++]
+      query: fetchTodos, // [!code ++]
+    })
+    ```
+
+    Note that `key` cannot **contain** a `ref` or `computed`. Pass a getter function instead — the function syntax is reactive and simpler to use.
+  </Step>
+  <Step title="Update option names in useMutation">
+    Rename `mutationFn` → `mutation`:
+
+    ```ts
+    useMutation({
+      mutationFn: (newTodo) => postTodo(newTodo), // [!code --]
+      mutation: (newTodo) => postTodo(newTodo), // [!code ++]
+    })
+    ```
+  </Step>
+  <Step title="Update status checks">
+    Replace `status === 'loading'` with `status === 'pending'`, and `isLoading` with `isPending`:
+
+    ```ts
+    if (status.value === 'loading') { /* ... */ } // [!code --]
+    if (status.value === 'pending') { /* ... */ } // [!code ++]
+    ```
+
+    For `asyncStatus` / `fetchStatus`, replace `'fetching'` with `'loading'`:
+
+    ```ts
+    if (fetchStatus.value === 'fetching') { /* ... */ } // [!code --]
+    if (asyncStatus.value === 'loading') { /* ... */ } // [!code ++]
+    ```
+  </Step>
+  <Step title="Replace per-call mutation callbacks">
+    TanStack's `mutate` function accepts `onSuccess`, `onError`, and `onSettled` callbacks. In Pinia Colada, use `mutateAsync` to handle per-call effects instead:
+
+    ```ts
+    mutate(todo, { // [!code --]
+      onSuccess, // [!code --]
+      onError, // [!code --]
+      onSettled, // [!code --]
+    }) // [!code --]
+    mutateAsync(todo) // [!code ++]
+      .then((data) => { // [!code ++]
+        onSuccess(data) // [!code ++]
+        onSettled?.(data, null) // [!code ++]
+      }) // [!code ++]
+      .catch((err) => { // [!code ++]
+        onError(err) // [!code ++]
+        onSettled?.(undefined, err) // [!code ++]
+      }) // [!code ++]
+    ```
+  </Step>
+  <Step title="Update imports">
+    Replace `@tanstack/vue-query` imports with `@pinia/colada`:
+
+    ```ts
+    import { useQuery, useMutation } from '@tanstack/vue-query' // [!code --]
+    import { useQuery, useMutation } from '@pinia/colada' // [!code ++]
+    ```
+  </Step>
+</Steps>
+
+## API differences
+
+### Option names
+
+| TanStack Vue Query | Pinia Colada | Notes            |
+| ------------------ | ------------ | ---------------- |
+| `queryKey`         | `key`        | Same purpose     |
+| `queryFn`          | `query`      | Same purpose     |
+| `mutationFn`       | `mutation`   | Same purpose     |
+
+### Status values
+
+| TanStack Vue Query            | Pinia Colada               |
+| ----------------------------- | -------------------------- |
+| `status: 'loading'`           | `status: 'pending'`        |
+| `fetchStatus: 'fetching'`     | `asyncStatus: 'loading'`   |
+| `fetchStatus: 'idle'`         | `asyncStatus: 'idle'`      |
+
+The default `staleTime` in Pinia Colada is **5 seconds** (vs 0 in TanStack Vue Query).
+
+### Refetching
+
+| TanStack Vue Query                  | Pinia Colada    |
+| ----------------------------------- | --------------- |
+| `refetch({ cancelRefetch: false })` | `refresh()`     |
+| `refetch({ throwOnError: true })`   | `refetch(true)` |
+
+### Features handled differently
+
+| TanStack Vue Query           | Pinia Colada equivalent                             |
+| ---------------------------- | --------------------------------------------------- |
+| `useQuery({ select })`       | Use a `computed()` or write logic inside `query`    |
+| `useQuery({ refetchInterval })` | [`@pinia/colada-plugin-auto-refetch`](https://github.com/posva/pinia-colada/tree/main/plugins/auto-refetch) |
+| `useQuery({ retry })`        | [`@pinia/colada-plugin-retry`](https://github.com/posva/pinia-colada/tree/main/plugins/retry) |
+| `useQuery().dataUpdatedAt`   | Custom plugin — see [Writing Plugins](/plugins/writing-plugins) |
+
+## Reusable queries
+
+In TanStack Vue Query you use `queryOptions()` to create reusable query definitions. In Pinia Colada, use `defineQueryOptions()`:
+
+```ts
+export const todosQuery = queryOptions({ // [!code --]
+  queryKey: ['todos'], // [!code --]
+  queryFn: getList, // [!code --]
+}) // [!code --]
+export const todosQuery = defineQueryOptions({ // [!code ++]
+  key: ['list'], // [!code ++]
+  query: getList, // [!code ++]
+}) // [!code ++]
+```
+
+Pinia Colada also provides [`defineQuery`](/advanced/reusable-queries), which has no TanStack equivalent. It lets you encapsulate a composable including reactive parameters, side effects, and multiple related queries in one place.
+
+See the [Organizing Queries](/guide/queries) section for the full recommended pattern.
+
+## Missing utilities
+
+Pinia Colada doesn't ship `useIsFetching` or `useIsMutating` as built-ins. Because Pinia Colada's caches are reactive Vue stores, you can implement them yourself in a few lines:
+
+```ts
+// src/utils/pinia-colada.ts
+import {
+  useMutationCache,
+  useQueryCache,
+  type UseMutationEntryFilter,
+  type UseQueryEntryFilter,
+} from '@pinia/colada'
+import { computed, type ComputedRef } from 'vue'
+
+/**
+ * Returns a computed ref that indicates whether there are any ongoing queries
+ * matching the provided filters.
+ */
+export function useIsLoading(filters?: UseQueryEntryFilter): ComputedRef<boolean> {
+  const queryCache = useQueryCache()
+
+  return computed(() =>
+    queryCache.getEntries(filters).some((entry) => entry.asyncStatus.value === 'loading'),
+  )
+}
+
+/**
+ * Returns a computed ref that indicates whether there are any ongoing mutations
+ * matching the provided filters.
+ */
+export function useIsMutating(filters?: UseMutationEntryFilter): ComputedRef<boolean> {
+  const mutationCache = useMutationCache()
+
+  return computed(() =>
+    mutationCache.getEntries(filters).some((entry) => entry.asyncStatus.value === 'loading'),
+  )
+}
+```
+
+Similarly, `useMutationState()` becomes:
+
+```ts
+const mutationCache = useMutationCache()
+const mutationStates = computed(() => mutationCache.getEntries({ key: ['createPost'] }).map((e) => e.state.value))
+```
+
+## Differences in philosophy
+
+<AccordionGroup>
+  <Accordion title="Structural sharing">
+    TanStack implements structural sharing — a React rendering optimization that partially updates objects based on what changed. Pinia Colada does **not** implement this. Instead, it uses [Shallow Refs](https://vuejs.org/api/reactivity-advanced.html#shallowref) and replaces the entire value after each successful query.
+
+    In Vue apps this is rarely a problem, but if you rely on object identity in watchers you can compare values manually:
+
+    ```ts
+    const { data } = useQuery({
+      key: ['todos'],
+      query: fetchTodos,
+    })
+
+    watch(data, (newData, oldData) => {
+      if (!isSameData(newData, oldData)) {
+        // do something with the new data
+      }
+    })
+    ```
+  </Accordion>
+  <Accordion title="Reactive keys">
+    In TanStack Vue Query you can embed `ref` or `computed` values inside `queryKey`. In Pinia Colada, `key` expects a [`MaybeRefOrGetter`](https://vuejs.org/api/utility-types.html#maybereforgetter) — use a getter function to keep it reactive:
+
+    ```ts
+    useQuery({
+      queryKey: ['todos', { page: computed(() => route.query.id) }], // [!code --]
+      key: () => ['todos', { page: route.query.page }], // [!code ++]
+    })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## TanStack compatibility plugin
+
+If you need a gradual migration or want to keep TanStack-style property names during the transition, install the compatibility plugin:
+
+```bash
+npm i @pinia/colada-plugin-tanstack-compat
+```
+
+Register it when installing Pinia Colada:
+
+```ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaTanStackCompat } from '@pinia/colada-plugin-tanstack-compat'
+
+const app = createApp(App)
+const pinia = createPinia()
+
+app.use(pinia)
+app.use(PiniaColada, {
+  plugins: [PiniaColadaTanStackCompat()],
+})
+```
+
+The plugin adds TanStack Query v5-compatible properties to every query and mutation via TypeScript module augmentation.
+
+### Properties added to `useQuery`
+
+| Property              | Type                                | TanStack equivalent   |
+| --------------------- | ----------------------------------- | --------------------- |
+| `isSuccess`           | `ComputedRef<boolean>`              | `isSuccess`           |
+| `isError`             | `ComputedRef<boolean>`              | `isError`             |
+| `isFetching`          | `ComputedRef<boolean>`              | `isFetching`          |
+| `isRefetching`        | `ComputedRef<boolean>`              | `isRefetching`        |
+| `isLoadingError`      | `ComputedRef<boolean>`              | `isLoadingError`      |
+| `isRefetchError`      | `ComputedRef<boolean>`              | `isRefetchError`      |
+| `isStale`             | `ComputedRef<boolean>`              | `isStale`             |
+| `isFetched`           | `ShallowRef<boolean>`               | `isFetched`           |
+| `isFetchedAfterMount` | `ShallowRef<boolean>`               | `isFetchedAfterMount` |
+| `dataUpdatedAt`       | `ShallowRef<number>`                | `dataUpdatedAt`       |
+| `errorUpdatedAt`      | `ShallowRef<number>`                | `errorUpdatedAt`      |
+| `fetchStatus`         | `ComputedRef<'fetching' \| 'idle'>` | `fetchStatus`         |
+
+### Properties added to `useMutation`
+
+<Warning>
+  Mutation extensions are **not** directly available on the `useMutation()` return value. Access them via the mutation cache instead:
+
+  ```ts
+  const mutationCache = useMutationCache()
+  const entry = mutationCache.getEntries({ key: ['myMutation'] })[0]
+  const isPending = entry?.ext.isPending.value
+  ```
+</Warning>
+
+| Property         | Type                   | TanStack equivalent |
+| ---------------- | ---------------------- | ------------------- |
+| `isIdle`         | `ComputedRef<boolean>` | `isIdle`            |
+| `isPending`      | `ComputedRef<boolean>` | `isPending`         |
+| `isSuccess`      | `ComputedRef<boolean>` | `isSuccess`         |
+| `isError`        | `ComputedRef<boolean>` | `isError`           |
+| `submittedAt`    | `ShallowRef<number>`   | `submittedAt`       |
+| `dataUpdatedAt`  | `ShallowRef<number>`   | N/A                 |
+| `errorUpdatedAt` | `ShallowRef<number>`   | N/A                 |
+
+### Known limitations
+
+<AccordionGroup>
+  <Accordion title="fetchStatus: 'paused' is not supported">
+    The plugin only exposes `'fetching' | 'idle'`. Pinia Colada has no network-mode concept, so `'paused'` doesn't apply.
+  </Accordion>
+  <Accordion title="isStale does not update based on time alone">
+    `isStale` is a computed that re-evaluates only when query state changes, not when time passes. If you need real-time staleness, read `entry.stale` directly from the query cache.
+  </Accordion>
+  <Accordion title="Properties not included">
+    | Property            | Alternative                      |
+    | ------------------- | -------------------------------- |
+    | `failureCount`      | Use `@pinia/colada-plugin-retry` |
+    | `failureReason`     | Use `@pinia/colada-plugin-retry` |
+    | `networkMode`       | Not supported                    |
+    | `select`            | Use `computed` properties        |
+    | `structuralSharing` | Not applicable in Vue            |
+    | `isPaused`          | Not supported                    |
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,198 @@
+---
+title: TypeScript
+description: Type inference, generic parameters, global error types, and typed meta for useQuery and useMutation.
+---
+
+Pinia Colada is written in TypeScript and designed so that most types are **inferred automatically** from your query and mutation functions. You rarely need to provide explicit type parameters.
+
+## Inferred types from `useQuery()`
+
+The data type is inferred from the return type of the `query` function. The error type defaults to the global `ErrorDefault` (which is `Error` unless you override it):
+
+```ts
+import { useQuery } from '@pinia/colada'
+
+const { data, error } = useQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos').then(r => r.json() as Promise<TodoItem[]>),
+})
+// data: Ref<TodoItem[] | undefined>
+// error: Ref<Error | null>
+```
+
+## Inferred types from `useMutation()`
+
+Similarly, the mutation argument type and result type are inferred from the `mutation` function:
+
+```ts
+import { useMutation } from '@pinia/colada'
+
+const { mutate, data, error } = useMutation({
+  mutation: (text: string) => createTodo(text),
+})
+// mutate: (text: string) => void
+// data: Ref<TodoItem | undefined>
+```
+
+## TypeScript narrowing with `state`
+
+Use the `state` object (which groups `status`, `data`, and `error`) to let TypeScript narrow types in templates and computed properties:
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+const { state } = useQuery({
+  key: ['user'],
+  query: () => fetch('/api/user').then(r => r.json() as Promise<{ name: string }>),
+})
+</script>
+
+<template>
+  <div v-if="state.status === 'pending'">Loading...</div>
+  <div v-else-if="state.status === 'error'">
+    <!-- state.error is non-null here -->
+    {{ state.error.message }}
+  </div>
+  <div v-else>
+    <!-- state.data is defined here -->
+    {{ state.data.name }}
+  </div>
+</template>
+```
+
+The individual aliases `data`, `error`, and `status` are refs and Vue cannot narrow their types inside `v-if` conditions. Use `state` for type-safe narrowing.
+
+## Customizing the global error type
+
+By default, `error` is typed as `Error`. To change the default error type across your entire application, augment the `TypesConfig` interface:
+
+```ts
+// types-extension.d.ts
+import '@pinia/colada'
+
+export {}
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    defaultError: MyCustomError
+  }
+}
+```
+
+After this, every `error` returned by `useQuery()` and `useMutation()` will be typed as `MyCustomError` unless overridden by an explicit generic.
+
+The `ErrorDefault` type is resolved as:
+
+```ts
+// from src/types-extension.ts
+export type ErrorDefault =
+  TypesConfig extends Record<'defaultError', infer E> ? E : Error
+```
+
+## Typing query meta
+
+Attach typed metadata to queries by augmenting `TypesConfig.queryMeta`:
+
+```ts
+// types-extension.d.ts
+import '@pinia/colada'
+
+export {}
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    queryMeta: {
+      errorMessage?: string
+      logLevel?: 'debug' | 'info' | 'warn' | 'error'
+    }
+  }
+}
+```
+
+Now the `meta` option in `useQuery()` is fully typed:
+
+```ts
+useQuery({
+  key: ['user', 1],
+  query: () => fetch('/api/user/1').then(r => r.json()),
+  meta: {
+    errorMessage: 'Failed to load user', // ✅ typed
+    logLevel: 'warn',                    // ✅ typed
+  },
+})
+```
+
+## Typing mutation meta
+
+The same pattern applies to mutation metadata via `TypesConfig.mutationMeta`:
+
+```ts
+// types-extension.d.ts
+import '@pinia/colada'
+
+export {}
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    mutationMeta: {
+      successMessage?: string
+    }
+  }
+}
+```
+
+## Type-safe cache access with `defineQueryOptions()`
+
+`defineQueryOptions()` attaches the data type to the query key. This propagates into `queryCache.getQueryData()` and `setQueryData()`:
+
+```ts
+import { defineQueryOptions, useQueryCache } from '@pinia/colada'
+import { getDocumentById } from '@/api/documents'
+
+const documentByIdQuery = defineQueryOptions(
+  ({ id }: { id: string }) => ({
+    key: ['documents', id],
+    query: () => getDocumentById(id),
+  }),
+)
+
+const queryCache = useQueryCache()
+
+// type inferred from defineQueryOptions — no cast required
+const doc = queryCache.getQueryData(documentByIdQuery({ id: '42' }).key)
+```
+
+Without `defineQueryOptions()` you would need to pass a generic manually:
+
+```ts
+// manual generic — error-prone
+const doc = queryCache.getQueryData<Document>(['documents', '42'])
+```
+
+## Full `TypesConfig` reference
+
+```ts
+// types-extension.d.ts
+import '@pinia/colada'
+
+export {}
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    // Changes the default type of all `error` refs
+    defaultError: MyCustomError
+
+    // Types the `meta` option in useQuery()
+    queryMeta: {
+      errorMessage?: string
+      logLevel?: 'debug' | 'info' | 'warn' | 'error'
+    }
+
+    // Types the `meta` option in useMutation()
+    mutationMeta: {
+      successMessage?: string
+    }
+  }
+}
+```
+
+<Note>
+All three `TypesConfig` fields are optional. You can augment only the ones you need. Fields not listed here default to `Error` (for `defaultError`) or `Record&lt;string, unknown&gt;` (for meta types).
+</Note>

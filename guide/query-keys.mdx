@@ -1,0 +1,303 @@
+---
+title: Query keys
+description: Understand how query keys identify, organize, and share cached data — and how to use key factories for type-safe, scalable key management.
+---
+
+Every query in Pinia Colada has a `key`. The key is a readonly array of JSON-serializable values that uniquely identifies the query in the cache. Along with the `query` function, it is one of the two required options for `useQuery()`.
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos').then((r) => r.json()),
+})
+```
+
+## What query keys do
+
+The key serves three purposes:
+
+1. **Cache identity** — queries with the same key share a single cache entry. Multiple components calling `useQuery` with `key: ['todos']` all read from and write to the same entry.
+2. **Reactive refetching** — when the key changes (because it depends on reactive state), Pinia Colada fetches the new entry and returns the cached one immediately if it already exists.
+3. **Targeted invalidation** — the hierarchical key structure lets you invalidate a broad group of queries at once.
+
+## Static keys
+
+For fixed endpoints — lists, global resources, user info — a static array is sufficient:
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+const { state } = useQuery({
+  key: ['products'],
+  query: () => getProducts(),
+})
+</script>
+```
+
+Any JSON-serializable value is valid inside a key:
+
+- `['products', 1]`
+- `['products', '1']`
+- `['products', { id: 1 }]`
+- `['products', { id: 1, type: 'book' }]`
+- `['products', 'search', { filters: { type: ['book', 'comic'] } }]`
+
+<Note>
+Object key order does not matter — `['products', { id: 1, type: 'book' }]` and `['products', { type: 'book', id: 1 }]` are the same key. Array order does matter — `['products', ['book', 'comic']]` and `['products', ['comic', 'book']]` are different keys.
+</Note>
+
+Additional serialization rules:
+
+- Numbers and strings are distinct: `['doc', 2]` and `['doc', '2']` are different keys.
+- `undefined` in objects is stripped; `null` is not. `['doc', { withComments: undefined }]` is equivalent to `['doc', {}]`.
+- Arrays are partially matched: `['doc', ['nested', 'array']]` is matched by `['doc', ['nested']]`.
+
+## Dynamic keys
+
+When a query depends on reactive state — route params, props, refs, or computed values — pass `key` as a getter function. Pinia Colada evaluates it reactively and re-runs the query whenever the result changes.
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+
+const { state } = useQuery({
+  key: () => ['products', route.params.id],
+  query: () => getProductById(route.params.id),
+})
+</script>
+```
+
+<Warning>
+Always include every variable used inside `query` in the key, and always use a getter function (or `computed` / `ref`) when the key depends on reactive state. A static key that references a reactive value will not update when the value changes.
+
+```ts
+// ✅ correct
+useQuery({
+  key: () => ['products', route.params.id],
+  query: () => getProductById(route.params.id),
+})
+
+// ❌ key is static — won't react to route changes
+useQuery({
+  key: ['products', route.params.id],
+  query: () => getProductById(route.params.id),
+})
+
+// ❌ key doesn't reflect query dependency — wrong cache entry
+useQuery({
+  key: () => ['products'],
+  query: () => getProductById(route.params.id),
+})
+```
+</Warning>
+
+The getter function form is the simplest and most readable. Two alternatives are also valid:
+
+<Tabs>
+  <Tab title="Getter function (recommended)">
+```vue
+<script setup lang="ts">
+const { id } = defineProps<{ id: number }>()
+
+useQuery({
+  key: () => ['products', id],
+  query: () => getProductById(id),
+})
+</script>
+```
+  </Tab>
+  <Tab title="Props object">
+```vue
+<script setup lang="ts">
+const props = defineProps<{ id: number }>()
+
+useQuery({
+  key: () => ['products', props.id],
+  query: () => getProductById(props.id),
+})
+</script>
+```
+  </Tab>
+  <Tab title="Computed ref">
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+
+const props = defineProps<{ id: number }>()
+const productKey = computed(() => ['products', props.id])
+
+useQuery({
+  key: productKey,
+  query: () => getProductById(props.id),
+})
+</script>
+```
+  </Tab>
+</Tabs>
+
+## Keys are hierarchical
+
+Keys form a hierarchy based on their array structure. A key is a _subset_ of (i.e. a prefix match for) any key that starts with the same elements.
+
+```ts
+// Full product details
+useQuery({
+  key: () => ['products', productId.value],
+  query: () => getProductById(productId.value),
+})
+
+// Product summary for search results
+useQuery({
+  key: () => ['products', productId.value, { searchResult: true }],
+  query: () => getProductSummaryById(productId.value),
+})
+```
+
+Both entries share the root `['products', productId]`. You can invalidate both at once:
+
+```ts
+// Invalidates the full product and the search summary (and anything else under this prefix)
+queryCache.invalidateQueries({ key: ['products', productId.value] })
+
+// More specific — only invalidates entries under ['products', productId, ...something]
+// Does NOT invalidate ['products', productId] itself
+queryCache.invalidateQueries({
+  key: ['products', productId.value, {}],
+})
+```
+
+Design your key hierarchy to match the natural relationships in your data model. A well-structured hierarchy makes bulk invalidation trivial.
+
+## Cache sharing between components
+
+When two components mount with the same key, they share a single cache entry and a single in-flight request. The second component to mount receives the result of the request already started by the first.
+
+```ts
+// ComponentA.vue and ComponentB.vue both call this.
+// One network request is made; both components receive the same data.
+useQuery({
+  key: ['user-profile'],
+  query: () => fetch('/api/profile').then((r) => r.json()),
+})
+```
+
+When the last component using a cache entry unmounts, the entry is kept in memory for `gcTime` (default: 5 minutes) before being garbage collected.
+
+## Key factories
+
+Hard-coding key arrays across multiple files leads to typos and makes refactoring painful. Key factories centralize key definitions in one place:
+
+```ts
+// queries/documents.ts
+export const DOCUMENT_QUERY_KEYS = {
+  root: ['documents'] as const,
+  byId: (id: string) => [...DOCUMENT_QUERY_KEYS.root, id] as const,
+  byIdWithComments: (id: string) =>
+    [...DOCUMENT_QUERY_KEYS.byId(id), { withComments: true }] as const,
+}
+
+export const DOCUMENT_COMMENT_QUERY_KEYS = {
+  root: ['documents', 'comments'] as const,
+  byId: (id: string) => [...DOCUMENT_COMMENT_QUERY_KEYS.root, id] as const,
+  byIdWithReplies: (id: string) =>
+    [...DOCUMENT_COMMENT_QUERY_KEYS.root, id, { replies: true }] as const,
+}
+```
+
+Guidelines:
+
+- `root` holds the top-level namespace array. It can contain multiple segments like `['documents', 'comments']`.
+- Derived keys spread `root` or the parent key to preserve hierarchy and avoid duplication.
+- `as const` improves TypeScript inference.
+
+Use the factory everywhere you reference the key:
+
+```ts
+import { useQuery, useQueryCache } from '@pinia/colada'
+import { useRoute } from 'vue-router'
+import { getDocumentById } from '@/api/documents'
+import { DOCUMENT_QUERY_KEYS } from '@/queries/documents'
+
+const route = useRoute()
+
+const { state } = useQuery({
+  key: () => DOCUMENT_QUERY_KEYS.byId(route.params.docId as string),
+  query: () => getDocumentById(route.params.docId as string),
+})
+
+const queryCache = useQueryCache()
+queryCache.invalidateQueries({
+  key: DOCUMENT_QUERY_KEYS.byId(route.params.docId as string),
+})
+```
+
+## Typed keys with `defineQueryOptions()`
+
+`defineQueryOptions()` attaches the inferred return type of `query` to the key itself. This makes `queryCache.getQueryData()` fully type-safe without a manual type parameter.
+
+```ts
+import { defineQueryOptions, useQueryCache } from '@pinia/colada'
+import { getDocumentList } from './api/documents'
+
+const documentList = defineQueryOptions({
+  key: ['documents', 'list'],
+  query: () => getDocumentList(),
+})
+
+const queryCache = useQueryCache()
+// Type is inferred from documentList.key — no generic needed
+const docList = queryCache.getQueryData(documentList.key)
+```
+
+For dynamic keys, pass a function to `defineQueryOptions()`. It returns a function instead of an object:
+
+```ts
+import { defineQueryOptions, useQueryCache } from '@pinia/colada'
+import { getDocumentById } from './api/documents'
+
+const documentByIdQuery = defineQueryOptions((id: string) => ({
+  key: ['documents', id],
+  query: () => getDocumentById(id),
+}))
+
+const queryCache = useQueryCache()
+// Fully typed
+const docById = queryCache.getQueryData(documentByIdQuery('some-id').key)
+```
+
+For multiple parameters, use a destructured object:
+
+```ts
+const documentByIdQuery = defineQueryOptions(
+  ({ id, withComments = false }: { id: string; withComments?: boolean }) => ({
+    key: ['documents', id, { comments: withComments }],
+    query: () => getDocumentById(id, withComments),
+  }),
+)
+```
+
+To use dynamic query options in a component, pass a getter function to `useQuery()`:
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+import { useRoute } from 'vue-router'
+import { documentByIdQuery } from '@/queries/documents'
+
+const route = useRoute()
+
+const { state } = useQuery(() =>
+  documentByIdQuery({
+    id: route.params.docId as string,
+  }),
+)
+</script>
+```
+
+<Tip>
+Combine key factories with `defineQueryOptions()` to get a fully type-safe, refactor-friendly query layer that scales across large projects.
+</Tip>

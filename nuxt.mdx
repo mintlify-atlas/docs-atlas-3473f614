@@ -1,0 +1,276 @@
+---
+title: "Nuxt"
+description: "Integrate Pinia Colada with Nuxt for automatic SSR, cross-component caching, and mutations with optimistic updates."
+---
+
+Pinia Colada integrates seamlessly with Nuxt via its dedicated module. It provides advanced caching, automatic deduplication, mutations with optimistic updates, and cross-component data sharing that goes beyond what Nuxt's built-in data fetching offers.
+
+## Choosing your data fetching approach
+
+Both Nuxt's native composables (`useFetch`/`useAsyncData`) and Pinia Colada can fetch data with SSR support. Use this table to decide which fits your use case:
+
+| Feature                | Nuxt native                | Pinia Colada                     |
+| ---------------------- | -------------------------- | -------------------------------- |
+| Best for               | Simple page-level data     | Complex app-wide state           |
+| SSR                    | `await` required           | Automatic via `onServerPrefetch` |
+| Parallel requests      | Manual via `Promise.all`   | Automatic                        |
+| Caching                | Manual via `getCachedData` | Automatic + deduplication + GC   |
+| Mutations              | Manual                     | Built-in `useMutation`           |
+| Optimistic updates     | Manual                     | Built-in                         |
+| Scope                  | Pages (prop drilling)      | Any component                    |
+| Stale-while-revalidate | Manual                     | Built-in                         |
+
+<Tabs>
+  <Tab title="Use Nuxt native (useFetch / useAsyncData)">
+    - Simple page-specific data that isn't shared across components
+    - One-off API calls without complex caching needs
+    - Single requests without parallel fetching
+  </Tab>
+  <Tab title="Use Pinia Colada">
+    - Data shared across multiple components or pages
+    - Automatic cache invalidation and garbage collection
+    - Parallel requests within a component
+    - Cache persistence
+    - Mutations with optimistic updates
+    - Complex apps with lots of interdependent data
+    - Deduplication and stale-while-revalidate
+  </Tab>
+</Tabs>
+
+## Installation
+
+<Steps>
+  <Step title="Install the packages">
+    <Tabs>
+      <Tab title="pnpm">
+        ```bash
+        pnpm add @pinia/colada
+        pnpm dlx nuxi module add @pinia/colada-nuxt
+        ```
+      </Tab>
+      <Tab title="npm">
+        ```bash
+        npm install @pinia/colada
+        npx nuxi module add @pinia/colada-nuxt
+        ```
+      </Tab>
+      <Tab title="yarn">
+        ```bash
+        yarn add @pinia/colada
+        yarn dlx nuxi module add @pinia/colada-nuxt
+        ```
+      </Tab>
+    </Tabs>
+
+    The `nuxi module add` command automatically adds the module to your `nuxt.config.ts`. To do it manually instead, install both packages and then add the module:
+
+    ```ts
+    // nuxt.config.ts
+    export default defineNuxtConfig({
+      modules: ['@pinia/colada-nuxt'],
+    })
+    ```
+  </Step>
+  <Step title="Install the Pinia Nuxt module">
+    Pinia Colada depends on Pinia. If you haven't already installed the Pinia Nuxt module, add it now:
+
+    ```bash
+    npx nuxi module add pinia
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+Configure the Pinia Colada plugin by creating a `colada.options.ts` file at the root of your project. The options are passed directly to the `PiniaColada` Vue plugin, so you can use them to add [plugins](/plugins/index) and set global query defaults.
+
+```ts
+// colada.options.ts
+import type { PiniaColadaOptions } from '@pinia/colada'
+
+export default {
+  // Options here
+} satisfies PiniaColadaOptions
+```
+
+## SSR without `await`
+
+**The key difference from Nuxt's data fetching: Pinia Colada doesn't require `await` for SSR.**
+
+With Nuxt's `useFetch`, you must `await` to block SSR and wait for data:
+
+```vue
+<script lang="ts" setup>
+// Nuxt: await required for SSR
+const { data } = await useFetch('/api/products')
+</script>
+```
+
+With Pinia Colada, `useQuery` uses `onServerPrefetch` internally, so queries automatically run and await on the server without explicit `await`:
+
+```vue
+<script lang="ts" setup>
+// Pinia Colada: no await needed, SSR works automatically
+const { data } = useQuery({
+  key: ['products'],
+  query: () => $fetch('/api/products'),
+})
+</script>
+```
+
+### How it works
+
+<Steps>
+  <Step title="Register via onServerPrefetch">
+    On the server, `useQuery` automatically registers itself via `onServerPrefetch`.
+  </Step>
+  <Step title="Run and await on the server">
+    The query runs and awaits during server-side rendering.
+  </Step>
+  <Step title="Serialize to payload">
+    Data is serialized into the Nuxt payload under the `pinia_colada` key.
+  </Step>
+  <Step title="Hydrate on the client">
+    The client picks up the serialized payload and hydrates the query cache — no extra code required.
+  </Step>
+</Steps>
+
+### When you still need `await`
+
+Using `await` with `useQuery` is useful when you want to **block client-side navigation** until data loads:
+
+```vue
+<script lang="ts" setup>
+const { data, refresh } = useQuery({
+  key: ['products'],
+  query: () => $fetch('/api/products'),
+})
+// Block navigation until products load
+await refresh()
+</script>
+```
+
+Without `await`, the page renders immediately (showing loading states) and data populates when ready.
+
+<Tip>
+  For deeper integration with Vue Router's navigation lifecycle, consider [Data Loaders](https://uvr.esm.is/data-loaders/colada/), which connect `useQuery` to Nuxt's navigation system.
+</Tip>
+
+## Migration guide
+
+### `useFetch` → `useQuery`
+
+```vue
+<script setup lang="ts">
+const { data, pending, error, refresh } = await useFetch('/api/products') // [!code --]
+const { data, isPending, error, refresh } = useQuery({ // [!code ++]
+  key: ['products'], // [!code ++]
+  query: () => $fetch('/api/products'), // [!code ++]
+}) // [!code ++]
+</script>
+```
+
+Key differences:
+
+- `pending` → `isPending`
+- Add a unique `key` for caching
+- Wrap the fetch call in the `query` option
+- Remove `await` — SSR works automatically. Add `await refresh()` only if you want to block navigation until data loads.
+
+### `useAsyncData` → `useQuery`
+
+```vue
+<script lang="ts" setup>
+const { data } = await useAsyncData( // [!code --]
+  'products', // [!code --]
+  () => $fetch('/api/products'), // [!code --]
+  { // [!code --]
+    getCachedData(key, nuxtApp) { // [!code --]
+      return nuxtApp.payload.data[key] || nuxtApp.static.data[key] // [!code --]
+    }, // [!code --]
+  }, // [!code --]
+) // [!code --]
+// [!code --]
+// Pinia Colada: caching is automatic // [!code ++]
+const { data } = useQuery({ // [!code ++]
+  key: ['products'], // [!code ++]
+  query: () => $fetch('/api/products'), // [!code ++]
+  staleTime: 1000 * 60, // optional: data fresh for 1 minute // [!code ++]
+}) // [!code ++]
+</script>
+```
+
+Pinia Colada handles caching automatically — you no longer need to implement `getCachedData` manually.
+
+## Shared data across components
+
+With Nuxt's `useFetch`, data fetched in a page component must be passed down via props to every child that needs it.
+
+```vue
+<!-- pages/products.vue -->
+<script lang="ts" setup>
+const { data: products } = await useFetch('/api/products')
+</script>
+
+<template>
+  <!-- Must pass products to every child that needs it -->
+  <ProductList :products="products" />
+  <ProductSummary :products="products" />
+</template>
+```
+
+With Pinia Colada, any component that uses the same `key` shares the cached data automatically — no prop drilling required, and no duplicate requests are made.
+
+```vue
+<!-- components/ProductList.vue -->
+<script lang="ts" setup>
+// Same key = same cached data, no props needed
+const { data: products } = useQuery({
+  key: ['products'],
+  query: () => $fetch('/api/products'),
+})
+</script>
+```
+
+```vue
+<!-- components/ProductSummary.vue -->
+<script lang="ts" setup>
+import { useQuery } from '@pinia/colada'
+
+// Shares cache with ProductList, no duplicate requests
+const { data: products } = useQuery({
+  key: ['products'],
+  query: () => $fetch('/api/products'),
+})
+</script>
+```
+
+<Tip>
+  See the [Query Organization Guide](/guide/queries) for best practices on structuring shared queries with `defineQueryOptions`.
+</Tip>
+
+## Error handling with SSR
+
+Standard JavaScript `Error` objects serialize automatically. For **custom error classes**, define a [Nuxt payload plugin](https://nuxt.com/blog/v3-4#payload-enhancements) to handle serialization and deserialization:
+
+```ts
+// plugins/my-error.ts
+import { MyError } from '~/errors'
+
+export default definePayloadPlugin(() => {
+  definePayloadReducer(
+    'MyError',
+    // serialize the data we need as an array, object, or any serializable format
+    (data) => data instanceof MyError && [data.message, data.customData],
+  )
+  definePayloadReviver(
+    'MyError',
+    // revive the data back to an instance of MyError
+    ([message, customData]) => new MyError(message, customData),
+  )
+})
+```
+
+<Warning>
+  Without a payload plugin, custom error class instances will be deserialized as plain objects on the client, losing their prototype chain and any custom methods.
+</Warning>

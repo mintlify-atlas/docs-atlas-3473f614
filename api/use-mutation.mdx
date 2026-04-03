@@ -1,0 +1,226 @@
+---
+title: useMutation
+description: Trigger async write operations (create, update, delete) with lifecycle hooks, optimistic updates, and automatic cache invalidation.
+---
+
+Sets up a mutation for performing async write operations. Unlike `useQuery`, mutations are triggered manually via `mutate()` or `mutateAsync()`.
+
+```typescript
+function useMutation<TData, TVars, TError, TContext>(
+  options: UseMutationOptions<TData, TVars, TError, TContext>
+): UseMutationReturn<TData, TVars, TError, TContext>
+```
+
+## Usage
+
+```typescript
+import { useMutation, useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+
+const { mutate, isLoading, error } = useMutation({
+  mutation: (id: number) => fetch(`/api/todos/${id}`, { method: 'DELETE' }).then((r) => r.json()),
+  onSuccess() {
+    queryCache.invalidateQueries({ key: ['todos'] })
+  },
+})
+
+// Fire and forget
+mutate(42)
+```
+
+### With variables
+
+```typescript
+interface CreateTodoInput {
+  title: string
+  completed: boolean
+}
+
+interface Todo extends CreateTodoInput {
+  id: number
+}
+
+const { mutateAsync, status } = useMutation<Todo, CreateTodoInput>({
+  mutation: (input) =>
+    fetch('/api/todos', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }).then((r) => r.json()),
+})
+
+// Await the result
+const newTodo = await mutateAsync({ title: 'Buy groceries', completed: false })
+```
+
+## Options
+
+<ParamField body="mutation" type="(vars: TVars, context: TContext) => Promise<TData>" required>
+  The async function to execute when `mutate()` or `mutateAsync()` is called. Receives the variables passed to `mutate` and the context returned by `onMutate`.
+</ParamField>
+
+<ParamField body="key" type="EntryKey | ((vars: TVars) => EntryKey)">
+  Optional key to identify the mutation globally. Allows other parts of the app to reference or interact with this mutation through the mutation cache.
+</ParamField>
+
+<ParamField body="onMutate" type="(vars: TVars, context: UseMutationGlobalContext) => TContext | Promise<TContext>">
+  Runs before the mutation executes. The return value becomes the `context` passed to `mutation`, `onSuccess`, `onError`, and `onSettled`. If it returns a promise, the mutation waits for it to settle.
+
+  <Note>
+    Declare `onMutate` **before** `mutation` in the options object for TypeScript to correctly infer the `context` type inside `mutation`.
+  </Note>
+
+  ```typescript
+  useMutation({
+    onMutate(vars) {
+      // snapshot previous state for rollback
+      const previous = queryCache.getQueryData(['todos'])
+      // optimistically update
+      queryCache.setQueryData(['todos'], (old) => [...old, { ...vars, id: -1 }])
+      return { previous }
+    },
+    mutation: async (vars, { previous }) => {
+      return fetch('/api/todos', { method: 'POST', body: JSON.stringify(vars) }).then((r) => r.json())
+    },
+    onError(_error, _vars, context) {
+      // roll back on failure
+      if (context?.previous) {
+        queryCache.setQueryData(['todos'], context.previous)
+      }
+    },
+  })
+  ```
+</ParamField>
+
+<ParamField body="onSuccess" type="(data: TData, vars: TVars, context: TContext) => unknown">
+  Runs when the mutation completes successfully. Ideal for cache invalidation or showing success notifications.
+
+  ```typescript
+  onSuccess(data, vars, context) {
+    queryCache.invalidateQueries({ key: ['todos'] })
+  }
+  ```
+</ParamField>
+
+<ParamField body="onError" type="(error: TError, vars: TVars, context: Partial<TContext>) => unknown">
+  Runs when the mutation fails. `context` properties may be `undefined` if `onMutate` threw before completing.
+</ParamField>
+
+<ParamField body="onSettled" type="(data: TData | undefined, error: TError | undefined, vars: TVars, context: Partial<TContext>) => unknown">
+  Runs after the mutation settles, regardless of whether it succeeded or failed. Useful for cleanup that should always happen.
+</ParamField>
+
+<ParamField body="gcTime" type="number | false" default="60000">
+  Time in milliseconds before an unused mutation entry is garbage collected. Set to `false` to disable. Defaults to 1 minute.
+</ParamField>
+
+<ParamField body="meta" type="MutationMeta">
+  Arbitrary metadata to associate with this mutation. Accessible via plugins.
+</ParamField>
+
+## Return values
+
+<ResponseField name="mutate" type="(vars?: TVars) => void">
+  Triggers the mutation without returning a promise. Errors are silently swallowed to avoid unhandled promise rejections. Use this for fire-and-forget mutations in event handlers.
+</ResponseField>
+
+<ResponseField name="mutateAsync" type="(vars?: TVars) => Promise<TData>">
+  Triggers the mutation and returns a promise that resolves with the data or rejects with the error. Use this when you need to `await` the result or chain `.then()` / `.catch()`.
+</ResponseField>
+
+<ResponseField name="data" type="ShallowRef<TData | undefined>">
+  The result of the most recent successful mutation. `undefined` before the first successful call.
+</ResponseField>
+
+<ResponseField name="error" type="ShallowRef<TError | null>">
+  The error from the most recent failed mutation. `null` if the mutation has not been called or if the last call succeeded.
+</ResponseField>
+
+<ResponseField name="status" type="ShallowRef<'pending' | 'success' | 'error'>">
+  The current status of the mutation's data.
+
+  - `'pending'` — mutation has not been called yet
+  - `'success'` — last call succeeded
+  - `'error'` — last call failed
+</ResponseField>
+
+<ResponseField name="asyncStatus" type="ShallowRef<'idle' | 'loading'>">
+  Whether the mutation is currently executing. `'loading'` while in flight, `'idle'` otherwise.
+</ResponseField>
+
+<ResponseField name="isLoading" type="ComputedRef<boolean>">
+  `true` when `asyncStatus === 'loading'`. Shorthand for checking whether a mutation is in flight.
+</ResponseField>
+
+<ResponseField name="variables" type="ShallowRef<TVars | undefined>">
+  The variables from the most recent mutation call. `undefined` before the first call.
+</ResponseField>
+
+<ResponseField name="state" type="ComputedRef<DataState<TData, TError>>">
+  Combined state object containing `data`, `error`, and `status`. Supports type narrowing based on `status`.
+</ResponseField>
+
+<ResponseField name="reset" type="() => void">
+  Resets the mutation state back to its initial `'pending'` state, clearing `data`, `error`, and `variables`.
+</ResponseField>
+
+## Complete example
+
+```vue
+<script setup lang="ts">
+import { useQueryCache, useMutation } from '@pinia/colada'
+
+interface Todo {
+  id: number
+  title: string
+  completed: boolean
+}
+
+const queryCache = useQueryCache()
+
+const {
+  mutate: createTodo,
+  mutateAsync: createTodoAsync,
+  isLoading,
+  error,
+  reset,
+} = useMutation<Todo, { title: string }>({
+  mutation: ({ title }) =>
+    fetch('/api/todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, completed: false }),
+    }).then((r) => {
+      if (!r.ok) throw new Error('Failed to create todo')
+      return r.json()
+    }),
+
+  onSuccess() {
+    // Refetch todos list after a successful create
+    queryCache.invalidateQueries({ key: ['todos'] })
+  },
+
+  onError(err) {
+    console.error('Mutation failed:', err)
+  },
+})
+
+async function handleSubmit(title: string) {
+  try {
+    const todo = await createTodoAsync({ title })
+    console.log('Created:', todo)
+  } catch (e) {
+    // error is also available in the reactive `error` ref
+  }
+}
+</script>
+
+<template>
+  <form @submit.prevent="handleSubmit('New todo')">
+    <p v-if="error" class="error">{{ error.message }} <button type="button" @click="reset">Dismiss</button></p>
+    <button type="submit" :disabled="isLoading">
+      {{ isLoading ? 'Creating…' : 'Create todo' }}
+    </button>
+  </form>
+</template>
+```

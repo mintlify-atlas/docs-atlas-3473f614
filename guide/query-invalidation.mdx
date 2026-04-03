@@ -1,0 +1,176 @@
+---
+title: Query invalidation
+description: Mark cached queries as stale and trigger refetches using invalidateQueries and setQueryData — with precise control over which entries are affected.
+---
+
+Query invalidation marks one or more cache entries as stale and, if the entry is currently active (used by a mounted component), immediately refetches it. This is the primary mechanism for keeping the UI in sync with server state after a write operation.
+
+## What invalidation means
+
+Pinia Colada caches query results and serves them while they are fresh (within `staleTime`). Invalidation overrides this: it forces an entry to be treated as stale. If the entry is active, Pinia Colada refetches it right away. If the entry is inactive (no component is currently using it), it is marked stale and will be refetched the next time a component mounts with that key.
+
+## `invalidateQueries()`
+
+Access the query cache with `useQueryCache()`, then call `invalidateQueries()`.
+
+```ts
+import { useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+
+// Invalidate all queries whose key starts with ['todos']
+queryCache.invalidateQueries({ key: ['todos'] })
+
+// Invalidate only the exact ['todos'] entry — not its children
+queryCache.invalidateQueries({ key: ['todos'], exact: true })
+
+// Invalidate all active queries (no filter)
+queryCache.invalidateQueries()
+```
+
+<Note>
+`useQueryCache()` is available inside component `setup` functions, Pinia stores, and Vue Router navigation guards — anywhere `inject()` is available. It cannot be called at the module scope or inside regular component methods.
+</Note>
+
+### Prefix vs exact matching
+
+By default, `invalidateQueries({ key })` performs a **prefix match**: it invalidates every entry whose key starts with the provided array. This takes advantage of the [key hierarchy](/guide/query-keys#keys-are-hierarchical).
+
+```ts
+// Invalidates:
+//   ['products', productId]
+//   ['products', productId, { searchResult: true }]
+//   ['products', productId, 'reviews']
+//   ...any key prefixed with ['products', productId]
+queryCache.invalidateQueries({ key: ['products', productId] })
+
+// Invalidates ONLY ['products', productId] — not any child entries
+queryCache.invalidateQueries({ key: ['products', productId], exact: true })
+```
+
+### Custom predicate filtering
+
+For complex filtering logic, pass a `predicate` function. It receives each cache entry and should return `true` to invalidate it:
+
+```ts
+queryCache.invalidateQueries({
+  predicate: (entry) =>
+    entry.key[0] === 'users' || entry.key[0] === 'todos',
+})
+```
+
+### Refetching inactive entries
+
+By default, inactive entries (those not currently used by any mounted component) are marked stale but not immediately refetched. Pass `'all'` as the second argument to also refetch inactive entries:
+
+```ts
+queryCache.invalidateQueries({ key: ['todos'] }, 'all')
+```
+
+## Manual cache updates with `setQueryData()`
+
+`setQueryData()` directly writes a value into the cache for a given key. Use it to apply an optimistic update before a mutation completes, or to seed the cache with data you already have.
+
+```ts
+const queryCache = useQueryCache()
+
+// Overwrite the ['todos'] cache entry with new data
+queryCache.setQueryData(['todos'], updatedTodos)
+```
+
+`getQueryData()` reads the current cached value:
+
+```ts
+const previousTodos = queryCache.getQueryData(['todos'])
+```
+
+## Invalidation in mutation hooks
+
+The most common pattern is to invalidate inside `onSettled` — after both success and error — to ensure the cache always reflects the latest server state:
+
+```vue
+<script lang="ts" setup>
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { createTodo } from './api/todos'
+
+const queryCache = useQueryCache()
+
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+  onSettled: () => {
+    queryCache.invalidateQueries({ key: ['todos'], exact: true })
+  },
+})
+</script>
+```
+
+### Awaiting invalidation
+
+To keep `asyncStatus` as `'loading'` until the refetch triggered by invalidation finishes — useful when you want to show a spinner through the entire operation — `await` the `invalidateQueries` call:
+
+```ts
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+  onSettled: async () =>
+    await queryCache.invalidateQueries({ key: ['todos'], exact: true }),
+})
+```
+
+### Invalidating multiple related queries
+
+Invalidate all queries related to a resource at once using the shared key prefix:
+
+```ts
+const queryCache = useQueryCache()
+
+const { mutate: updateDocument } = useMutation({
+  mutation: (doc: { id: string; title: string }) =>
+    fetch(`/api/documents/${doc.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title: doc.title }),
+    }),
+  onSettled: (_, __, vars) => {
+    // Invalidates the document detail, its comments, its summary, etc.
+    queryCache.invalidateQueries({ key: ['documents', vars.id] })
+    // Also invalidate the list so it shows the updated title
+    queryCache.invalidateQueries({ key: ['documents'], exact: true })
+  },
+})
+```
+
+## Optimistic updates combined with invalidation
+
+Combine `setQueryData()` in `onMutate` with invalidation in `onSettled` for optimistic updates that fall back gracefully on error:
+
+```ts
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { createTodo } from './api/todos'
+
+const queryCache = useQueryCache()
+
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+
+  onMutate: (text: string) => {
+    // Snapshot current data
+    const previousTodos = queryCache.getQueryData(['todos'])
+    // Optimistically add the new item
+    queryCache.setQueryData(['todos'], [...(previousTodos || []), { text }])
+    return { previousTodos }
+  },
+
+  onError: (error, variables, { previousTodos }) => {
+    // Roll back on failure
+    queryCache.setQueryData(['todos'], previousTodos)
+  },
+
+  onSettled: () => {
+    // Always sync with the server
+    queryCache.invalidateQueries({ key: ['todos'] })
+  },
+})
+```
+
+<Tip>
+Always invalidate in `onSettled` even when using optimistic updates. The optimistic write is a best guess — the server response may differ, and invalidation ensures the cache converges to the real data.
+</Tip>

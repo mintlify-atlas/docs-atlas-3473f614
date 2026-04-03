@@ -1,0 +1,219 @@
+---
+title: Reusable queries
+description: Share query state and local refs across components with defineQuery(), and organize query options with defineQueryOptions().
+---
+
+`useQuery()` can be called directly in any component, but as your application grows you will often need the same query — and its associated local state — to be shared across multiple components. Pinia Colada provides two tools for this: `defineQuery()` and `defineQueryOptions()`.
+
+## Why a plain composable is not enough
+
+You might reach for a regular composable first:
+
+```ts
+// src/queries/todos.ts
+import { useQuery } from '@pinia/colada'
+import { ref } from 'vue'
+
+export function useFilteredTodos() {
+  const search = ref('')
+  const query = useQuery({
+    key: () => ['todos', search.value],
+    query: () => fetch(`/api/todos?search=${search.value}`).then((res) => res.json()),
+  })
+  return { search, ...query }
+}
+```
+
+This has two problems:
+
+- Each component that calls `useFilteredTodos()` gets its **own** `search` ref. They are not synchronized.
+- `useQuery()` is global — only the `search` ref from the **first component to mount** will affect the query key. Components that mount later silently use a stale ref.
+
+## `defineQuery()`: globally shared composables
+
+Wrapping the composable with `defineQuery()` makes the entire setup function run **once**, like a Pinia store:
+
+<CodeGroup>
+
+```ts src/queries/todos.ts
+import { defineQuery, useQuery } from '@pinia/colada'
+import { ref } from 'vue'
+
+export const useFilteredTodos = defineQuery(() => {
+  // `search` is shared by all components that call this composable
+  const search = ref('')
+  const { state, ...rest } = useQuery({
+    key: () => ['todos', { search: search.value }],
+    query: () => fetch(`/api/todos?filter=${search.value}`, { method: 'GET' }),
+  })
+  return {
+    ...rest,
+    todoList: state,
+    search,
+  }
+})
+```
+
+```vue src/pages/todo-list.vue
+<script setup lang="ts">
+import { useFilteredTodos } from '@/queries/todos'
+
+const { todoList, search } = useFilteredTodos()
+</script>
+```
+
+</CodeGroup>
+
+All components that call `useFilteredTodos()` share the same `search` ref and the same query state. Updating `search` in one component updates it everywhere.
+
+<Tip>
+Use `defineQuery()` when the same query key is used by multiple simultaneously mounted components that also need to share local state (like a filter or a selected id). If you only need to share the query options themselves, `defineQueryOptions()` is simpler.
+</Tip>
+
+### Static options form
+
+`defineQuery()` also accepts a plain options object when you do not need extra local state:
+
+```ts
+import { defineQuery } from '@pinia/colada'
+
+const useTodoList = defineQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos', { method: 'GET' }),
+})
+```
+
+### Nuxt: use `vue-router`'s `useRoute()`
+
+When using `defineQuery()` in Nuxt, import `useRoute` from `vue-router` explicitly rather than relying on Nuxt's auto-import:
+
+```ts
+import { useRoute } from 'vue-router'
+import { defineQuery, useQuery } from '@pinia/colada'
+
+export const useContactDetails = defineQuery(() => {
+  const route = useRoute()
+  return useQuery({
+    key: () => ['contacts', route.params.contactId],
+    query: () =>
+      fetch(`/api/contacts/${route.params.contactId}`).then((res) => res.json()),
+  })
+})
+```
+
+Using Nuxt's version of `useRoute()` can cause the query to trigger more than expected during navigation, or return `undefined` due to Nuxt's internal Suspense handling.
+
+## SSR caveat
+
+`defineQuery()` looks like a Pinia setup store but **does not serialize its returned state** to the page. Only the data returned by `useQuery()` inside it is hydrated. Avoid conditional server-only initialization of local refs:
+
+```ts
+defineQuery(() => {
+  const search = ref('')
+  // ❌ `search` will have different values on server and client
+  if (import.meta.env.SSR) {
+    search.value = fetchSomeInitialValue()
+  }
+  return { search, ...useQuery({ key: () => ['todos', search.value], query: () => fetch('/api/todos') }) }
+})
+```
+
+If you need SSR-safe local state, move it to a Pinia store:
+
+```ts
+import { defineStore, storeToRefs } from 'pinia'
+import { defineQuery, useQuery } from '@pinia/colada'
+import { ref } from 'vue'
+
+const useLocalStore = defineStore('query-search-store', () => {
+  const search = ref('')
+  return { search }
+})
+
+defineQuery(() => {
+  const { search } = storeToRefs(useLocalStore())
+  if (import.meta.env.SSR) {
+    search.value = getInitialValue()
+  }
+  const query = useQuery({
+    key: () => ['todos', search.value],
+    query: () => fetch(`/api/todos?search=${search.value}`).then((res) => res.json()),
+  })
+  return { search, ...query }
+})
+```
+
+In Nuxt you can replace `ref()` with `useState()` instead of creating a store.
+
+## `defineQueryOptions()`: type-safe shared options
+
+`defineQueryOptions()` defines a reusable options object (or factory function) whose **key carries type information** about the query's data. This makes `queryCache.getQueryData()` and `setQueryData()` fully type-safe when called with that key.
+
+### Key factories pattern
+
+Group all keys for a domain in one place to avoid typos and keep keys consistent:
+
+```ts
+// src/queries/documents.ts
+import { defineQueryOptions } from '@pinia/colada'
+import { getDocumentById } from '@/api/documents'
+
+export const DOCUMENT_QUERY_KEYS = {
+  root: ['documents'] as const,
+  byId: (id: string) => [...DOCUMENT_QUERY_KEYS.root, id] as const,
+  byIdWithComments: (id: string, withComments?: boolean) =>
+    [...DOCUMENT_QUERY_KEYS.byId(id), { withComments }] as const,
+}
+
+export const documentByIdQuery = defineQueryOptions(
+  ({ id, withComments = false }: { id: string; withComments?: boolean }) => ({
+    key: DOCUMENT_QUERY_KEYS.byIdWithComments(id, withComments),
+    query: () => getDocumentById(id, { withComments }),
+  }),
+)
+```
+
+Use in a component by passing a getter to `useQuery()`:
+
+```vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+import { documentByIdQuery } from '@/queries/documents'
+
+const route = useRoute()
+const { data } = useQuery(() =>
+  documentByIdQuery({ id: route.params.docId as string }),
+)
+</script>
+```
+
+### Type-safe cache access
+
+Because `defineQueryOptions()` tags the key with the query's data type, cache reads are typed without a manual generic:
+
+```ts
+import { useQueryCache } from '@pinia/colada'
+import { documentByIdQuery } from '@/queries/documents'
+
+const queryCache = useQueryCache()
+
+// type of `doc` is inferred as the Document type — no cast needed
+const doc = queryCache.getQueryData(documentByIdQuery({ id: '42' }).key)
+```
+
+### Overriding individual options
+
+Since `defineQueryOptions()` returns a plain object, you can spread it and override specific options per usage:
+
+```ts
+import { ref } from 'vue'
+import { useQuery } from '@pinia/colada'
+import { documentByIdQuery } from '@/queries/documents'
+
+const enabled = ref(false)
+useQuery(() => ({
+  ...documentByIdQuery({ id: '42' }),
+  enabled: enabled.value,
+}))
+```

@@ -1,0 +1,336 @@
+---
+title: Queries
+description: Declaratively manage async read operations with useQuery — automatic caching, deduplication, and reactive refetching included.
+---
+
+Queries manage asynchronous state declaratively, letting you focus on the data, its status, and any errors. They automatically deduplicate concurrent requests and cache results to improve performance and user experience.
+
+Queries are designed to **read** data from async sources — `GET` requests, GraphQL, WebSockets, or any function that returns a `Promise`. For **writing** data, use [mutations](/guide/mutations) instead.
+
+## Basic usage
+
+The entry point for all queries is `useQuery()`. It requires two options:
+
+- `key` — a unique array that identifies the query in the cache
+- `query` — an async function that fetches the data
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+const {
+  state,
+  asyncStatus,
+  data,
+  error,
+  status,
+  isLoading,
+  isPending,
+  refresh,
+  refetch,
+} = useQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos').then((res) => res.json()),
+})
+</script>
+
+<template>
+  <main>
+    <div v-if="asyncStatus === 'loading'">Loading...</div>
+    <div v-else-if="state.status === 'error'">Oops, an error happened...</div>
+    <div v-else-if="state.data">
+      <TodoItem v-for="todo in state.data" :key="todo.id" :todo="todo" />
+    </div>
+  </main>
+</template>
+```
+
+Queries are triggered **automatically when needed** — you declare what data you want, and Pinia Colada handles the rest.
+
+## Return values
+
+### `state` and `asyncStatus`
+
+`state` is a computed ref containing the query's data, error, and status as a single discriminated object. `asyncStatus` tracks whether a fetch is currently in flight.
+
+<AccordionGroup>
+  <Accordion title="state.status values">
+
+| `status`    | `data`                   | `error`   |
+| ----------- | ------------------------ | --------- |
+| `'pending'` | `undefined`              | `null`    |
+| `'success'` | defined                  | `null`    |
+| `'error'`   | `undefined` or defined   | defined   |
+
+  </Accordion>
+  <Accordion title="asyncStatus vs status">
+
+`asyncStatus` is either `'idle'` or `'loading'`. It reflects whether the query function is currently running, independent of whether there is cached data.
+
+`status` (and `state.status`) reflects the data state: has the query ever resolved? Did it succeed or fail?
+
+The two are separate so you can show different UI for a query that is _loading for the first time_ versus one that is _refreshing existing data_.
+
+  </Accordion>
+</AccordionGroup>
+
+### Convenience refs
+
+`data`, `error`, and `status` are shallowRefs that alias `state.value.data`, `state.value.error`, and `state.value.status`. They are provided for convenience and to ease migration from other libraries.
+
+<Note>
+Use `state` when you need TypeScript to narrow types automatically. When `state.status === 'error'`, TypeScript knows `state.error` is non-null and when `state.status === 'success'`, `state.data` is defined.
+</Note>
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+const { state } = useQuery({
+  key: ['user-info'],
+  query: () =>
+    fetch('/api/user-info').then((res) => res.json() as Promise<{ name: string }>),
+})
+</script>
+
+<template>
+  <div v-if="state.status === 'pending'">Loading...</div>
+  <div v-else-if="state.status === 'error'">
+    <!-- error type excludes null here -->
+    Error: {{ state.error.message }}
+  </div>
+  <div v-else>
+    <!-- data type excludes undefined here -->
+    {{ state.data.name }}
+  </div>
+</template>
+```
+
+### Other return values
+
+| Property           | Type                | Description                                                                 |
+| ------------------ | ------------------- | --------------------------------------------------------------------------- |
+| `isPending`        | `ComputedRef<boolean>` | `true` when `status === 'pending'`                                       |
+| `isLoading`        | `ShallowRef<boolean>`  | `true` when `asyncStatus === 'loading'`                                  |
+| `isPlaceholderData`| `ComputedRef<boolean>` | `true` when displaying `placeholderData` instead of real cache data      |
+
+## `refresh()` and `refetch()`
+
+Both methods trigger the query and return a promise that resolves to the `state` object. Errors are caught internally so they are safe to call directly in templates.
+
+```ts
+const { refresh, refetch } = useQuery({
+  key: ['user-info'],
+  query: async () => ({ name: 'John Doe', id: 2 }),
+})
+
+// Returns state, catches errors internally
+refetch().then(({ data, error }) => {
+  if (error) {
+    console.error('Unexpected Error:', error)
+  } else {
+    console.log('Fetched data:', data)
+  }
+})
+
+// Pass `true` to rethrow errors instead
+refetch(true).catch((error) => {
+  console.error('Error refetching:', error)
+})
+```
+
+<Tip>
+Prefer `refresh()` in most cases — it reuses any in-flight request and skips the network call if data is still fresh (based on `staleTime`). Use `refetch()` only when you need to bypass the cache entirely, for example when the user explicitly requests a reload.
+</Tip>
+
+## Reactive keys
+
+When your query depends on reactive values like route params or refs, pass `key` as a getter function. Pinia Colada watches the key reactively and fetches new data whenever the key changes.
+
+```vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+
+const route = useRoute()
+
+const { state } = useQuery({
+  key: () => ['contacts', route.params.id as string],
+  query: () =>
+    fetch(`/api/contacts/${route.params.id}`).then((res) => res.json()),
+})
+</script>
+```
+
+Each unique key value produces a separate cache entry. Navigating back to a previously visited route instantly shows the cached data while Pinia Colada checks for freshness in the background.
+
+<Warning>
+Always include every variable used inside `query` in the `key`. A key that does not reflect the query's actual dependencies will cause stale data to be served from the wrong cache entry.
+
+```ts
+// ✅ key mirrors query dependency
+useQuery({
+  key: () => ['products', route.params.id],
+  query: () => getProductById(route.params.id),
+})
+
+// ❌ key is static but query is dynamic — wrong cache entry will be used
+useQuery({
+  key: ['products'],
+  query: () => getProductById(route.params.id),
+})
+```
+</Warning>
+
+### Reactive key forms
+
+All three forms below are equivalent. The getter function is the most concise and readable.
+
+<Tabs>
+  <Tab title="Getter function (recommended)">
+```vue
+<script setup lang="ts">
+const { id } = defineProps<{ id: number }>()
+
+useQuery({
+  key: () => ['products', id],
+  query: () => getProductById(id),
+})
+</script>
+```
+  </Tab>
+  <Tab title="Props object">
+```vue
+<script setup lang="ts">
+const props = defineProps<{ id: number }>()
+
+useQuery({
+  key: () => ['products', props.id],
+  query: () => getProductById(props.id),
+})
+</script>
+```
+  </Tab>
+  <Tab title="Computed ref">
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+
+const props = defineProps<{ id: number }>()
+const productKey = computed(() => ['products', props.id])
+
+useQuery({
+  key: productKey,
+  query: () => getProductById(props.id),
+})
+</script>
+```
+  </Tab>
+</Tabs>
+
+## `staleTime` and cache freshness
+
+`staleTime` controls how long cached data is considered fresh (default: 5 seconds). While fresh, `refresh()` returns the cached value without making a network request. Once stale, the next `refresh()` call — including those triggered automatically on mount or window focus — will fetch new data.
+
+```ts
+useQuery({
+  key: ['products'],
+  query: () => fetch('/api/products').then((r) => r.json()),
+  // Consider data fresh for 60 seconds
+  staleTime: 60_000,
+})
+```
+
+Related options that control automatic refetching:
+
+| Option                  | Default | Description                                          |
+| ----------------------- | ------- | ---------------------------------------------------- |
+| `staleTime`             | `5000`  | ms before cached data is considered stale            |
+| `gcTime`                | `300000`| ms before unused cache entries are garbage collected |
+| `refetchOnMount`        | `true`  | Refresh on component mount if stale                  |
+| `refetchOnWindowFocus`  | `true`  | Refresh when window regains focus if stale           |
+| `refetchOnReconnect`    | `true`  | Refresh when network reconnects if stale             |
+
+Set any of these to `'always'` to always refetch regardless of staleness, or `false` to disable.
+
+## Pausing queries with `enabled`
+
+Use `enabled` to prevent a query from running until its dependencies are ready.
+
+```ts
+import { defineQuery, useQuery } from '@pinia/colada'
+import { useRoute } from 'vue-router'
+
+export const useCurrentDeck = defineQuery(() => {
+  const route = useRoute()
+
+  const result = useQuery({
+    key: () => ['decks', Number(route.params.deckId)],
+    query: () =>
+      fetch(`/api/decks?deckId=${route.params.deckId}`).then((res) => res.json()),
+    // Only run when deckId is present in the route
+    enabled: () => 'deckId' in route.params,
+  })
+
+  return result
+})
+```
+
+## Organizing queries with `defineQueryOptions()`
+
+As your project grows, centralize query definitions in dedicated files using `defineQueryOptions()`. This pairs keys and query functions together in one place.
+
+<CodeGroup>
+
+```ts queries/documents.ts
+import { defineQueryOptions } from '@pinia/colada'
+import { getDocumentById } from '@/api/documents'
+
+export const DOCUMENT_QUERY_KEYS = {
+  root: ['documents'] as const,
+  byId: (id: string) => [...DOCUMENT_QUERY_KEYS.root, id] as const,
+  byIdWithComments: (id: string, withComments?: boolean) =>
+    [...DOCUMENT_QUERY_KEYS.byId(id), { withComments }] as const,
+}
+
+export const documentByIdQuery = defineQueryOptions(
+  ({ id, withComments = false }: { id: string; withComments?: boolean }) => ({
+    key: DOCUMENT_QUERY_KEYS.byIdWithComments(id, withComments),
+    query: () => getDocumentById(id, { withComments }),
+  }),
+)
+```
+
+```vue pages/documents/[docId].vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+import { documentByIdQuery } from '@/queries/documents'
+
+const route = useRoute()
+
+const { data } = useQuery(() =>
+  documentByIdQuery({
+    id: route.params.docId as string,
+  }),
+)
+</script>
+```
+
+</CodeGroup>
+
+To override individual options at the call site, spread the base options and add your overrides:
+
+```ts
+import { ref } from 'vue'
+import { useQuery } from '@pinia/colada'
+import { productDetailsQuery } from '@/queries/products'
+
+const enabled = ref(false)
+
+useQuery(() => ({
+  ...productDetailsQuery('24'),
+  // Override `enabled` only for this usage
+  enabled: enabled.value,
+}))
+```

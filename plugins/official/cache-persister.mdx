@@ -1,0 +1,132 @@
+---
+title: Cache Persister
+description: Persist the Pinia Colada query cache to localStorage, sessionStorage, or any custom storage adapter, and restore it on startup.
+---
+
+`@pinia/colada-plugin-cache-persister` persists successful query results to storage and restores them when your app starts. This means users see cached data immediately on page load — before any network requests complete.
+
+## Installation
+
+```bash
+npm install @pinia/colada-plugin-cache-persister
+```
+
+## Setup
+
+Import `PiniaColadaCachePersister` and add it to the `plugins` array:
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaCachePersister } from '@pinia/colada-plugin-cache-persister'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaCachePersister({
+      key: 'pinia-colada-cache',
+      storage: localStorage,
+      debounce: 1000,
+    }),
+  ],
+})
+```
+
+## Configuration
+
+The plugin is configured globally only — there are no per-query options.
+
+<AccordionGroup>
+  <Accordion title="key: string (default: 'pinia-colada-cache')">
+    The key used to store and retrieve the cache in the storage backend.
+
+    ```ts
+    PiniaColadaCachePersister({ key: 'my-app-cache' })
+    ```
+  </Accordion>
+  <Accordion title="storage: Storage (default: localStorage)">
+    The storage backend to use. Must implement `getItem`, `setItem`, and optionally `removeItem`. Accepts both synchronous (`localStorage`, `sessionStorage`) and asynchronous adapters (e.g. IndexedDB wrappers).
+
+    ```ts
+    PiniaColadaCachePersister({ storage: sessionStorage })
+    ```
+  </Accordion>
+  <Accordion title="debounce: number (default: 1000)">
+    Milliseconds to debounce writes to storage. Prevents excessive writes when many queries settle at once.
+
+    ```ts
+    PiniaColadaCachePersister({ debounce: 500 })
+    ```
+  </Accordion>
+  <Accordion title="filter: UseQueryEntryFilter">
+    Restrict which queries are persisted. Accepts the same filter object as `queryCache.invalidateQueries()`. If omitted, all successful queries are persisted.
+
+    ```ts
+    // Only persist queries whose key starts with 'todos' or 'user'
+    PiniaColadaCachePersister({
+      filter: { key: ['todos'] },
+    })
+
+    // Only persist specific active queries
+    PiniaColadaCachePersister({
+      filter: { active: true },
+    })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Waiting for the cache to restore
+
+If you use an asynchronous storage adapter (such as an IndexedDB wrapper), the cache may not be ready by the time your app mounts. Use `isCacheReady()` to wait before mounting:
+
+```ts main.ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+import {
+  PiniaColadaCachePersister,
+  isCacheReady,
+} from '@pinia/colada-plugin-cache-persister'
+import App from './App.vue'
+
+async function main() {
+  const app = createApp(App)
+  const pinia = createPinia()
+
+  app.use(pinia)
+  app.use(PiniaColada, {
+    plugins: [PiniaColadaCachePersister()],
+  })
+
+  await isCacheReady()
+  app.mount('#app')
+}
+
+main()
+```
+
+<Note>
+  For synchronous storage like `localStorage`, you don't need to await `isCacheReady()`. The cache is restored synchronously before the app mounts.
+</Note>
+
+## Custom storage adapter
+
+Any object implementing the `PiniaColadaStorage` interface works as a storage backend:
+
+```ts
+import type { PiniaColadaStorage } from '@pinia/colada-plugin-cache-persister'
+
+const myStorage: PiniaColadaStorage = {
+  getItem: (key) => myDB.get(key),
+  setItem: (key, value) => myDB.set(key, value),
+  removeItem: (key) => myDB.delete(key),
+}
+
+PiniaColadaCachePersister({ storage: myStorage })
+```
+
+Both sync and async return values are supported for each method.
+
+## Notes
+
+- Only entries with `status: 'success'` are persisted. Errors are never written to storage.
+- Garbage collection still applies: if an entry is removed from the cache, it disappears from persisted data on the next write.
+- Storage errors (e.g. quota exceeded) are silently ignored to avoid crashing the app.

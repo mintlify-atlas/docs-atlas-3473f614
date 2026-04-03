@@ -1,0 +1,174 @@
+---
+title: Query cache
+description: Interact with the central query cache to invalidate, prefetch, read, and write query data from anywhere in your application.
+---
+
+The query cache is the central store that Pinia Colada uses to manage all query state. It is implemented as a Pinia store (`_pc_query`) and can be accessed anywhere an injection context is available: component `setup`, Pinia stores, or Vue Router navigation guards.
+
+## Accessing the cache
+
+```vue
+<script setup lang="ts">
+import { useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+</script>
+```
+
+Outside a component, `useQueryCache()` works inside Pinia stores and router navigation guards because they also have an injection context.
+
+## Cache methods
+
+### `invalidateQueries(filter?, options?)`
+
+Marks matching queries as stale and schedules a refetch. Queries that are currently mounted refetch immediately; inactive entries are refetched the next time they are used.
+
+```ts
+// invalidate all queries under the 'contacts' key
+queryCache.invalidateQueries({ key: ['contacts'] })
+
+// invalidate only the exact entry for contact 42
+queryCache.invalidateQueries({ key: ['contacts', 42], exact: true })
+
+// invalidate using a custom predicate
+queryCache.invalidateQueries({
+  predicate: (entry) => entry.state.value.status === 'error',
+})
+```
+
+### `setQueryData(key, data)`
+
+Writes data directly into the cache for a given key, setting its status to `'success'`. If no entry exists for the key, one is created.
+
+```ts
+import type { Contact } from '@/api/contacts'
+
+queryCache.setQueryData<Contact>(['contacts', 42], {
+  id: 42,
+  name: 'Ada Lovelace',
+})
+
+// updater function form — receives the current data
+queryCache.setQueryData<Contact[]>(['contacts'], (prev) => [
+  ...(prev ?? []),
+  { id: 43, name: 'Grace Hopper' },
+])
+```
+
+When using [`defineQueryOptions()`](/advanced/reusable-queries), the key carries type information so no explicit generic is needed:
+
+```ts
+import { documentByIdQuery } from '@/queries/documents'
+
+// data type is inferred from the query options
+queryCache.setQueryData(documentByIdQuery({ id: '42' }).key, updatedDocument)
+```
+
+### `getQueryData(key)`
+
+Reads the current data for a key synchronously. Returns `undefined` if the entry does not exist or has not yet resolved.
+
+```ts
+const contact = queryCache.getQueryData<Contact>(['contacts', 42])
+```
+
+### `cancelQueries(filter?, reason?)`
+
+Aborts any in-flight requests for matching queries. The `AbortSignal` passed to the `query` function is aborted. Useful before an optimistic update to prevent a stale response from overwriting the cache.
+
+```ts
+queryCache.cancelQueries({ key: ['contacts', 42] })
+```
+
+### `prefetchQuery(options)`
+
+Fetches a query and populates the cache without mounting a component. Returns a promise that resolves when the fetch completes.
+
+<Note>
+`prefetchQuery` is typically called in server-side rendering or in router navigation guards to warm the cache before a page renders.
+</Note>
+
+## Filtering queries
+
+All methods that accept a filter (`invalidateQueries`, `cancelQueries`, `getEntries`) use the same `EntryFilter` shape:
+
+| Property | Description |
+|---|---|
+| `key` | Array key prefix. Matches the entry and all of its descendants. |
+| `exact` | When `true`, only matches the entry with exactly this key. |
+| `predicate` | A function `(entry) => boolean` for custom matching logic. |
+
+```ts
+// all queries whose key starts with ['contacts']
+queryCache.getEntries({ key: ['contacts'] })
+
+// only the entry for ['contacts', 42]
+queryCache.getEntries({ key: ['contacts', 42], exact: true })
+
+// entries that are currently loading
+queryCache.getEntries({
+  predicate: (entry) => entry.asyncStatus.value === 'loading',
+})
+```
+
+## Subscribing to cache events with `$onAction()`
+
+Because the query cache is a Pinia store, you can use `$onAction()` to hook into every cache action. This is how plugins observe cache mutations:
+
+```ts
+import { useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+
+queryCache.$onAction(({ name, args, after, onError }) => {
+  if (name === 'setEntryState') {
+    const [entry, state] = args
+    console.log('Cache entry updated:', entry.key, state)
+  }
+
+  after((result) => {
+    // called after the action completes successfully
+  })
+
+  onError((error) => {
+    // called if the action throws
+  })
+})
+```
+
+Common action names you can observe:
+
+| Action | When it fires |
+|---|---|
+| `extend` | A new entry is created in the cache. |
+| `setEntryState` | An entry's data or error changes. |
+| `fetch` | A query fetch is initiated. |
+| `invalidate` | A single entry is marked stale. |
+| `cancel` | An in-flight request is aborted. |
+
+## Writing plugins
+
+Plugins receive the query cache as an argument, making `$onAction()` the primary extension point:
+
+```ts
+import { PiniaColada } from '@pinia/colada'
+import type { App } from 'vue'
+
+declare const app: App
+
+app.use(PiniaColada, {
+  plugins: [
+    (queryCache) => {
+      queryCache.$onAction(({ name, args }) => {
+        if (name === 'extend') {
+          const [entry] = args
+          // attach custom properties to every new entry
+          console.log('New entry created:', entry.key)
+        }
+      })
+    },
+  ],
+})
+```
+
+See the [writing plugins](/plugins/writing-plugins) guide for a full walkthrough.

@@ -1,0 +1,210 @@
+---
+title: 'PiniaColada plugin'
+description: 'Install and configure the PiniaColada Vue plugin, including global query and mutation options.'
+---
+
+The `PiniaColada` plugin is the main entry point for Pinia Colada. Install it after Pinia to enable queries and mutations throughout your application.
+
+## Installation
+
+```ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+import App from './App.vue'
+
+const app = createApp(App)
+app.use(createPinia())
+app.use(PiniaColada, {
+  // options
+})
+app.mount('#app')
+```
+
+<Note>
+  Install Pinia before `PiniaColada`, or pass the Pinia instance explicitly via
+  the `pinia` option.
+</Note>
+
+## `PiniaColadaOptions`
+
+Options passed as the second argument to `app.use(PiniaColada, options)`.
+
+<ParamField body="pinia" type="Pinia">
+  Pinia instance to use. Only required if installing `PiniaColada` before the
+  Pinia plugin.
+</ParamField>
+
+<ParamField body="plugins" type="PiniaColadaPlugin[]">
+  Array of Pinia Colada plugins to install. Each plugin receives a
+  `PiniaColadaPluginContext` and can hook into the query cache lifecycle.
+</ParamField>
+
+<ParamField body="queryOptions" type="UseQueryOptionsGlobal">
+  Global defaults applied to every `useQuery()` and `defineQuery()` call. Any
+  per-query option overrides these defaults.
+</ParamField>
+
+<ParamField body="mutationOptions" type="UseMutationOptionsGlobal">
+  Global defaults applied to every `useMutation()` and `defineMutation()` call.
+</ParamField>
+
+## `UseQueryOptionsGlobal`
+
+Global defaults for all queries. All fields are optional.
+
+<ParamField body="enabled" type="MaybeRefOrGetter<boolean>">
+  Whether queries are enabled. When `false`, a query will not execute until
+  `refetch()` or `refresh()` is called explicitly.
+</ParamField>
+
+<ParamField body="staleTime" type="number" default="5000">
+  Time in milliseconds after which cached data is considered stale and will be
+  refreshed on the next read. Default is 5 seconds.
+</ParamField>
+
+<ParamField body="gcTime" type="number | false" default="300000">
+  Time in milliseconds before an unused entry is garbage-collected. Set to
+  `false` to disable garbage collection. Default is 5 minutes.
+</ParamField>
+
+<ParamField body="refetchOnMount" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Whether to refetch when a component using the query is mounted. `true` refetches
+  only if data is stale; `'always'` always refetches.
+</ParamField>
+
+<ParamField body="refetchOnWindowFocus" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Whether to refetch when the browser window regains focus.
+</ParamField>
+
+<ParamField body="refetchOnReconnect" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Whether to refetch when the network reconnects.
+</ParamField>
+
+<ParamField body="placeholderData" type="(previousData, previousEntry) => any">
+  A function returning placeholder data shown while a query is loading for the
+  first time. Unlike `initialData`, this does not change the cache state.
+</ParamField>
+
+<ParamField body="ssrCatchError" type="boolean" default="false">
+  Whether to catch errors during SSR (`onServerPrefetch`) when a query fails.
+</ParamField>
+
+## `UseMutationOptionsGlobal`
+
+Global defaults for all mutations. All fields are optional.
+
+<ParamField body="gcTime" type="number | false" default="60000">
+  Time in milliseconds before an unused mutation entry is garbage-collected.
+  Default is 1 minute.
+</ParamField>
+
+<ParamField body="onMutate" type="(vars) => Awaitable<context | void | null>">
+  Runs before any mutation executes. Can return a context object passed to
+  `mutation`, `onSuccess`, `onError`, and `onSettled`.
+</ParamField>
+
+<ParamField body="onSuccess" type="(data, vars, context) => unknown">
+  Runs globally after any mutation succeeds.
+</ParamField>
+
+<ParamField body="onError" type="(error, vars, context) => unknown">
+  Runs globally after any mutation fails.
+</ParamField>
+
+<ParamField body="onSettled" type="(data, error, vars, context) => unknown">
+  Runs globally after any mutation settles, whether it succeeded or failed.
+</ParamField>
+
+## Example with global options
+
+```ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+import App from './App.vue'
+
+const app = createApp(App)
+app.use(createPinia())
+app.use(PiniaColada, {
+  queryOptions: {
+    staleTime: 30_000,       // treat data as fresh for 30 seconds
+    gcTime: 600_000,         // keep unused entries for 10 minutes
+    refetchOnWindowFocus: false,
+  },
+  mutationOptions: {
+    onError(error) {
+      console.error('Mutation failed:', error)
+    },
+  },
+})
+app.mount('#app')
+```
+
+## `PiniaColadaQueryHooksPlugin`
+
+A built-in plugin that adds global lifecycle hooks to all queries.
+
+```ts
+import { PiniaColada, PiniaColadaQueryHooksPlugin } from '@pinia/colada'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaQueryHooksPlugin({
+      onSuccess(data, entry) {
+        console.log('Query succeeded:', entry.key, data)
+      },
+      onError(error, entry) {
+        console.error('Query failed:', entry.key, error)
+      },
+      onSettled(data, error, entry) {
+        console.log('Query settled:', entry.key)
+      },
+    }),
+  ],
+})
+```
+
+### `PiniaColadaQueryHooksPluginOptions`
+
+<ParamField body="onSuccess" type="(data, entry) => unknown">
+  Called when any query resolves successfully. Receives the resolved data and
+  the query entry.
+</ParamField>
+
+<ParamField body="onError" type="(error, entry) => unknown">
+  Called when any query throws an error. Receives the error and the query entry.
+</ParamField>
+
+<ParamField body="onSettled" type="(data, error, entry) => unknown">
+  Called after any query settles — whether it succeeded or failed. Awaits the
+  result of `onSuccess` or `onError` if they return a promise.
+</ParamField>
+
+## Writing your own plugin
+
+Plugins are functions that receive a `PiniaColadaPluginContext`. Use the
+`queryCache.$onAction()` hook to intercept cache actions.
+
+```ts
+import type { PiniaColadaPlugin } from '@pinia/colada'
+
+const myPlugin: PiniaColadaPlugin = ({ queryCache, pinia, scope }) => {
+  queryCache.$onAction(({ name, after, onError }) => {
+    if (name === 'fetch') {
+      after(() => {
+        // runs after every successful fetch
+      })
+      onError((error) => {
+        // runs after every failed fetch
+      })
+    }
+  })
+}
+
+app.use(PiniaColada, {
+  plugins: [myPlugin],
+})
+```
+
+See the [plugin types reference](/api/types#plugin-types) for full type details.

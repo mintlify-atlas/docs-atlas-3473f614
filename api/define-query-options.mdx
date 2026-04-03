@@ -1,0 +1,209 @@
+---
+title: 'defineQueryOptions()'
+description: 'Create typed query options with type-safe cache keys for use with useQuery() and the query cache.'
+---
+
+`defineQueryOptions()` produces type-safe query options. The key benefit is that it tags the returned key with the query's data and error types — enabling fully typed access through `queryCache.getQueryData()` and `queryCache.setQueryData()` without manual type assertions.
+
+## Signature
+
+`defineQueryOptions()` has three overloads depending on whether your options are static or dynamic.
+
+### Static options
+
+```ts
+function defineQueryOptions<
+  TData,
+  TError = ErrorDefault,
+  TDataInitial extends TData | undefined = undefined,
+>(
+  options: DefineQueryOptions<TData, TError, TDataInitial>
+): DefineQueryOptionsTagged<TData, TError, TDataInitial>
+```
+
+### Dynamic options — optional parameter
+
+```ts
+function defineQueryOptions<
+  Params,
+  TData,
+  TError = ErrorDefault,
+  TDataInitial extends TData | undefined = undefined,
+>(
+  setupOptions: (params?: Params) => DefineQueryOptions<TData, TError, TDataInitial>
+): (params?: Params) => DefineQueryOptionsTagged<TData, TError, TDataInitial>
+```
+
+### Dynamic options — required parameter
+
+```ts
+function defineQueryOptions<
+  Params,
+  TData,
+  TError = ErrorDefault,
+  TDataInitial extends TData | undefined = undefined,
+>(
+  setupOptions: (params: Params) => DefineQueryOptions<TData, TError, TDataInitial>
+): (params: Params) => DefineQueryOptionsTagged<TData, TError, TDataInitial>
+```
+
+<ParamField body="options" type="DefineQueryOptions<TData, TError, TDataInitial>">
+  Static query options. The same shape as `UseQueryOptions`, but reactive
+  wrappers are not allowed on `initialData` and `placeholderData`.
+</ParamField>
+
+<ParamField body="setupOptions" type="(params?: Params) => DefineQueryOptions">
+  A function that accepts optional or required parameters and returns query
+  options. Use this when the key or query function depends on runtime values.
+</ParamField>
+
+## Return value
+
+<ResponseField name="options" type="DefineQueryOptionsTagged<TData, TError, TDataInitial>">
+  When passed a static object, returns the same options tagged with type
+  information on the key.
+</ResponseField>
+
+<ResponseField name="factory" type="(params) => DefineQueryOptionsTagged<TData, TError, TDataInitial>">
+  When passed a function, returns a factory function with the same parameter
+  signature. Call the factory to produce tagged options at runtime.
+</ResponseField>
+
+## `DefineQueryOptionsTagged`
+
+```ts
+interface DefineQueryOptionsTagged<
+  TData = unknown,
+  TError = ErrorDefault,
+  TDataInitial extends TData | undefined = undefined,
+> extends DefineQueryOptions<TData, TError, TDataInitial> {
+  key: EntryKeyTagged<TData, TError, TDataInitial>
+}
+```
+
+The `key` on the returned options is an `EntryKeyTagged` — an `EntryKey` with
+phantom type symbols attached. These symbols carry `TData`, `TError`, and
+`TDataInitial` so that `queryCache.getQueryData()` and `queryCache.setQueryData()`
+can infer the correct types automatically.
+
+## Type-safe benefits
+
+Without `defineQueryOptions()`, cache access requires manual type assertions:
+
+```ts
+// Without defineQueryOptions — you must assert the type manually
+const data = queryCache.getQueryData<Document>(['documents', 4])
+```
+
+With `defineQueryOptions()`, the type flows from the options definition:
+
+```ts
+const documentQuery = defineQueryOptions((id: number) => ({
+  key: ['documents', id],
+  query: () => fetchDocument(id),
+}))
+
+// TypeScript infers Document automatically — no assertion needed
+const data = queryCache.getQueryData(documentQuery(4).key)
+```
+
+## Examples
+
+### Static options
+
+```ts
+import { defineQueryOptions } from '@pinia/colada'
+
+const currentUserQuery = defineQueryOptions({
+  key: ['user', 'current'],
+  query: () => fetch('/api/me').then((r) => r.json() as Promise<User>),
+  staleTime: 60_000,
+})
+
+// Use directly with useQuery
+const { data } = useQuery(currentUserQuery)
+
+// Type-safe cache read
+const user = queryCache.getQueryData(currentUserQuery.key) // User | undefined
+```
+
+### Dynamic options with a required parameter
+
+```ts
+import { defineQueryOptions } from '@pinia/colada'
+
+const documentQuery = defineQueryOptions((id: number) => ({
+  key: ['documents', id],
+  query: () => fetchDocument(id),
+}))
+
+// Use with useQuery in a component
+const { data } = useQuery(() => documentQuery(props.id))
+
+// Type-safe cache reads and writes
+const doc = queryCache.getQueryData(documentQuery(4).key) // Document | undefined
+queryCache.setQueryData(documentQuery(4).key, newDoc)     // newDoc must be Document
+```
+
+### Dynamic options with an object parameter
+
+```ts
+import { defineQueryOptions } from '@pinia/colada'
+
+interface TodoFilters {
+  status: 'all' | 'active' | 'done'
+  page: number
+}
+
+const todoListQuery = defineQueryOptions((filters: TodoFilters) => ({
+  key: ['todos', filters],
+  query: () =>
+    fetch(`/api/todos?status=${filters.status}&page=${filters.page}`)
+      .then((r) => r.json() as Promise<Todo[]>),
+}))
+```
+
+### Combining with `defineQuery()`
+
+You can pass `defineQueryOptions()` results directly to `defineQuery()`:
+
+```ts
+import { defineQuery, defineQueryOptions } from '@pinia/colada'
+
+const todoOptions = defineQueryOptions({
+  key: ['todos'],
+  query: () => fetchTodos(),
+})
+
+// defineQuery wraps the options in a reusable composable
+const useTodos = defineQuery(todoOptions)
+```
+
+### Invalidating by typed key
+
+```ts
+const documentQuery = defineQueryOptions((id: number) => ({
+  key: ['documents', id],
+  query: () => fetchDocument(id),
+}))
+
+// Invalidate a specific document
+await queryCache.invalidateQueries({ key: documentQuery(4).key })
+
+// Invalidate all documents (partial key match)
+await queryCache.invalidateQueries({ key: ['documents'] })
+```
+
+## Notes
+
+<Note>
+  `defineQueryOptions()` is a no-op at runtime — it returns its argument
+  unchanged. The value it adds is purely in the type system, tagging the key
+  with data type information.
+</Note>
+
+<Tip>
+  Define your query options in a separate file (e.g., `queries.ts`) so they can
+  be imported both in components and in places that need direct cache access,
+  such as route handlers or Pinia stores.
+</Tip>

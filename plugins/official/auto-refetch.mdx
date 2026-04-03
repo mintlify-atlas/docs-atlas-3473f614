@@ -1,0 +1,129 @@
+---
+title: Auto Refetch
+description: Automatically refetch queries on a schedule using staleTime or a fixed interval.
+---
+
+`@pinia/colada-plugin-auto-refetch` automatically refetches queries when they become stale, using either the query's `staleTime` or a fixed interval you specify.
+
+<Note>
+  This plugin schedules timers and is client-only. It will not schedule refetches during SSR.
+</Note>
+
+## Installation
+
+```bash
+npm install @pinia/colada-plugin-auto-refetch
+```
+
+## Setup
+
+Import `PiniaColadaAutoRefetch` and add it to the `plugins` array:
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaAutoRefetch } from '@pinia/colada-plugin-auto-refetch'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaAutoRefetch({
+      // disabled by default; enable globally or per query
+      autoRefetch: false,
+    }),
+  ],
+})
+```
+
+## Configuration
+
+The `autoRefetch` option is available both globally (plugin options) and per query. The per-query value overrides the global default.
+
+<AccordionGroup>
+  <Accordion title="autoRefetch: false">
+    Disables auto-refetch. This is the default.
+
+    ```ts
+    PiniaColadaAutoRefetch({ autoRefetch: false })
+    ```
+  </Accordion>
+  <Accordion title="autoRefetch: true">
+    Enables auto-refetch. The plugin uses the query's `staleTime` as the refetch interval.
+
+    ```ts
+    PiniaColadaAutoRefetch({ autoRefetch: true })
+    ```
+
+    <Warning>
+      When using `autoRefetch: true`, you must also set a `staleTime` on your query. Without a `staleTime`, there is nothing to schedule.
+    </Warning>
+  </Accordion>
+  <Accordion title="autoRefetch: number">
+    Refetches on a fixed interval in milliseconds, regardless of `staleTime`.
+
+    ```ts
+    PiniaColadaAutoRefetch({ autoRefetch: 30_000 }) // every 30 seconds
+    ```
+  </Accordion>
+  <Accordion title="autoRefetch: (state) => boolean | number">
+    Dynamically enables or disables refetching (or sets the interval) based on the current query state.
+
+    ```ts
+    PiniaColadaAutoRefetch({
+      autoRefetch: (state) => (state.data ? 30_000 : false),
+    })
+    ```
+
+    Return `false` or `0` to disable, `true` to use `staleTime`, or a number for a fixed interval in milliseconds.
+  </Accordion>
+</AccordionGroup>
+
+## Usage examples
+
+### Enable globally with staleTime
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaAutoRefetch } from '@pinia/colada-plugin-auto-refetch'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaAutoRefetch({ autoRefetch: true }),
+  ],
+  queryOptions: {
+    staleTime: 60_000, // 1 minute global staleTime
+  },
+})
+```
+
+### Per-query override
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+  staleTime: 10_000,
+  autoRefetch: true, // refetch every 10 seconds
+})
+```
+
+### Dynamic interval based on state
+
+```ts
+useQuery({
+  key: ['live-price'],
+  query: fetchLivePrice,
+  autoRefetch: (state) => {
+    // poll every 5s when we have data, skip otherwise
+    return state.data ? 5_000 : false
+  },
+})
+```
+
+### Disable per query
+
+```ts
+useQuery({
+  key: ['config'],
+  query: fetchConfig,
+  autoRefetch: false, // opt out for this query
+})
+```

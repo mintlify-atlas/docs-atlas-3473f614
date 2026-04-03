@@ -1,0 +1,176 @@
+---
+title: Infinite queries
+description: Load and merge paginated data into a single cache entry for infinite scrolling and "load more" patterns.
+---
+
+`useInfiniteQuery()` stores all fetched pages under a single cache key. Each call to `loadNextPage()` appends a new page to `data.pages` without creating a new cache entry. This makes it ideal for infinite scrolling and "load more" UIs.
+
+<Note>
+If you need independent cache entries per page (classic numbered pagination), use `useQuery()` with the page number in the key instead. See [Paginated queries](/guide/paginated-queries).
+</Note>
+
+## When to use
+
+`useInfiniteQuery()` is the right choice when:
+
+- you want infinite scrolling or a "load more" button
+- all loaded pages should be invalidated and refetched as a single unit
+- you do not want pages to be garbage-collected independently
+
+## Key design
+
+**The page param is not part of the query key.** Put filters (search text, sort order, user id) in the key, not the cursor or page number:
+
+```ts
+useInfiniteQuery({
+  key: () => ['feed', { search: search.value }],
+  // ...
+})
+```
+
+Changing the key resets the infinite query because it creates a new cache entry.
+
+## Options
+
+| Option | Required | Description |
+|---|---|---|
+| `key` | Yes | Reactive key identifying the cache entry. |
+| `query` | Yes | Async function receiving `{ pageParam }` that returns one page of data. |
+| `initialPageParam` | Yes | The param used for the very first fetch. |
+| `getNextPageParam` | Yes | Returns the next page param from the last page, or `null`/`undefined` when there are no more pages. |
+| `getPreviousPageParam` | No | Returns the previous page param from the first page, for backward pagination. |
+| `maxPages` | No | Maximum number of pages to keep in memory. Oldest pages are evicted when exceeded. |
+
+## Return values
+
+| Value | Type | Description |
+|---|---|---|
+| `data` | `{ pages, pageParams }` | All fetched pages and their associated params. |
+| `hasNextPage` | `ShallowRef<boolean>` | `true` when `getNextPageParam` returns a non-null value. |
+| `hasPreviousPage` | `ShallowRef<boolean>` | `true` when `getPreviousPageParam` returns a non-null value. |
+| `loadNextPage()` | Function | Fetches the next page and appends it to `data.pages`. |
+| `loadPreviousPage()` | Function | Fetches the previous page and prepends it to `data.pages`. |
+
+## Page-based example
+
+```ts
+import { useInfiniteQuery } from '@pinia/colada'
+
+const {
+  data,
+  asyncStatus,
+  hasNextPage,
+  loadNextPage,
+} = useInfiniteQuery({
+  key: ['feed'],
+  initialPageParam: 1,
+  query: ({ pageParam }) => fetch(`/api/feed?page=${pageParam}`).then(r => r.json()),
+  getNextPageParam: (lastPage) => lastPage.nextPage ?? null,
+})
+```
+
+The API response is expected to look like:
+
+```json
+{
+  "items": [/* page items */],
+  "nextPage": 2
+}
+```
+
+When `nextPage` is `null`, `hasNextPage` becomes `false` and `loadNextPage()` becomes a no-op.
+
+The result shape:
+
+- `data.value.pages` — array of page responses in load order
+- `data.value.pageParams` — array of params used to fetch each corresponding page
+
+## Cursor-based example
+
+If your API returns a cursor instead of a page number:
+
+```ts
+useInfiniteQuery({
+  key: ['notifications'],
+  initialPageParam: null as string | null,
+  query: ({ pageParam }) => api.listNotifications({ cursor: pageParam }),
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? null,
+})
+```
+
+## Infinite scroll with IntersectionObserver
+
+A common pattern is to trigger `loadNextPage()` automatically when the user scrolls near the bottom of the list:
+
+```vue
+<script setup lang="ts">
+import { useTemplateRef, watch, onWatcherCleanup } from 'vue'
+import { useInfiniteQuery } from '@pinia/colada'
+
+const {
+  data: facts,
+  loadNextPage,
+  hasNextPage,
+} = useInfiniteQuery({
+  key: ['feed'],
+  query: async ({ pageParam }) =>
+    fetch(`/api/feed?page=${pageParam}&limit=10`).then(r => r.json()),
+  initialPageParam: 1,
+  getNextPageParam: (lastPage) =>
+    lastPage.nextPageUrl ? lastPage.currentPage + 1 : null,
+})
+
+const loadMoreTrigger = useTemplateRef<HTMLElement>('loadMoreTrigger')
+
+watch(loadMoreTrigger, (el) => {
+  if (!el) return
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (entries[0]?.isIntersecting) {
+        loadNextPage()
+      }
+    },
+    { rootMargin: '300px', threshold: [0] },
+  )
+  observer.observe(el)
+  onWatcherCleanup(() => {
+    observer.disconnect()
+  })
+})
+</script>
+
+<template>
+  <ul>
+    <li
+      v-for="item in (facts?.pages ?? []).flatMap(page => page.items)"
+      :key="item.id"
+    >
+      {{ item.text }}
+    </li>
+  </ul>
+  <div ref="loadMoreTrigger" v-if="hasNextPage">Loading more...</div>
+</template>
+```
+
+## Limiting memory with `maxPages`
+
+For very long feeds or chat-like UIs, cap the number of pages kept in memory:
+
+```ts
+useInfiniteQuery({
+  key: ['chat', conversationId],
+  initialPageParam: 1,
+  maxPages: 10,
+  // ...
+})
+```
+
+When a new page is loaded and the total exceeds `maxPages`, the oldest page is evicted from the cache.
+
+## Invalidation and refetch
+
+Invalidating the infinite query invalidates the **whole entry**. When refetched, all previously loaded pages are re-fetched in sequence using their stored `pageParams`.
+
+## SSR
+
+Infinite queries are serialized as a single cache entry, just like any other query. Typically you prefetch the first page on the server, and load additional pages on the client as the user scrolls.

@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Pinia Colada",
+  "projectType": "sdk-library",
+  "projectName": "Pinia Colada",
+  "projectDescription": "The smart async data fetching layer for Vue, built on top of Pinia with automatic caching, deduplication, and invalidation.",
   "theme": "palm",
-  "colors": {
-    "primary": "#beca58",
-    "light": "#e7f3c7",
-    "dark": "#57bb61"
-  },
-  "favicon": "https://icons.duckduckgo.com/ip3/pinia-colada.esm.dev.ico",
-  "logo": {
-    "light": "https://media.brand.dev/2566f05d-c0f4-4738-bc54-0bb43a953811.svg",
-    "dark": "https://media.brand.dev/2566f05d-c0f4-4738-bc54-0bb43a953811.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/posva/pinia-colada"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/posva/pinia-colada"
-    }
-  },
+  "primaryColor": "#beca58",
+  "lightColor": "#e7f3c7",
+  "darkColor": "#57bb61",
   "navigation": {
     "tabs": [
       {
@@ -110,5 +93,42 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Automatic client-side caching with request deduplication",
+    "useQuery composable for declarative data fetching",
+    "useMutation composable for data mutations with lifecycle hooks",
+    "Query cache invalidation and automatic refetching",
+    "Optimistic updates for instant UI feedback",
+    "Infinite and paginated query support",
+    "Out-of-the-box SSR support via onServerPrefetch",
+    "Plugin system for extending functionality (retry, auto-refetch, delay, cache persistence)",
+    "Full TypeScript support with type-safe cache access",
+    "Nuxt module integration",
+    "Zero dependencies beyond Pinia and Vue",
+    "~2kb baseline bundle size, fully tree-shakeable"
+  ],
+  "publicApiSurface": [
+    "useQuery(options)",
+    "useMutation(options)",
+    "useInfiniteQuery(options)",
+    "useQueryCache()",
+    "useQueryState(key)",
+    "defineQuery(composable)",
+    "defineMutation(composable)",
+    "defineQueryOptions(options)",
+    "PiniaColada (Vue plugin)",
+    "PiniaColadaOptions",
+    "PiniaColadaQueryHooksPlugin",
+    "hydrateQueryCache()",
+    "serializeQueryCache()",
+    "toCacheKey()",
+    "UseQueryReturn",
+    "UseMutationReturn",
+    "UseInfiniteQueryReturn",
+    "DataState",
+    "QueryCache",
+    "MutationCache",
+    "TypesConfig (module augmentation)"
+  ]
 }

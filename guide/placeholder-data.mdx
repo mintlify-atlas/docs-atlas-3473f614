@@ -1,0 +1,90 @@
+---
+title: Placeholder data
+description: Show stale or synthetic data while a query is loading its first result for a new key.
+---
+
+The `placeholderData` option lets you supply data to display while a query entry is in the `pending` state. Unlike `initialData`, placeholder data is **never written to the cache** — it is purely a display-layer hint.
+
+## The `placeholderData` option
+
+Pass a static value or a function to `placeholderData`:
+
+<Tabs>
+  <Tab title="Static value">
+    ```ts
+    import { useQuery } from '@pinia/colada'
+
+    const { data } = useQuery({
+      key: ['contacts'],
+      query: () => fetch('/api/contacts').then(r => r.json()),
+      placeholderData: [],
+    })
+    ```
+  </Tab>
+  <Tab title="Function (previous data)">
+    ```ts
+    import { useQuery } from '@pinia/colada'
+
+    const { data } = useQuery({
+      key: ['contacts', page],
+      query: () => fetch(`/api/contacts?page=${page}`).then(r => r.json()),
+      placeholderData: (previousData) => previousData,
+    })
+    ```
+
+    The function receives the data from the **previous** cache entry. Returning it carries that data forward as a placeholder while the new entry loads.
+  </Tab>
+</Tabs>
+
+## Effect on status
+
+While placeholder data is being shown:
+
+- `state.status` is `'success'` — the query appears resolved to consumer components
+- `asyncStatus` is `'loading'` — the actual fetch is still in progress
+- `isPlaceholderData` is `true` — you can detect the placeholder state and show a subtle loading indicator
+
+```vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+
+const route = useRoute()
+const { data, isPlaceholderData, asyncStatus } = useQuery({
+  key: () => ['contacts', Number(route.query.page) || 1],
+  query: () =>
+    fetch(`/api/contacts?page=${Number(route.query.page) || 1}`).then(r => r.json()),
+  placeholderData: (previousData) => previousData,
+})
+</script>
+
+<template>
+  <div :style="{ opacity: isPlaceholderData ? 0.5 : 1 }">
+    <ContactList :contacts="data" />
+  </div>
+  <span v-if="asyncStatus === 'loading'">Updating...</span>
+</template>
+```
+
+## Common pattern: seamless page transitions
+
+The most common use of `placeholderData` is for [paginated queries](/guide/paginated-queries). Without it, navigating to a new page clears `data` immediately because a new cache entry with no data is created. Passing `(previousData) => previousData` keeps the old page visible until the new one arrives:
+
+```vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+
+const route = useRoute()
+const { state, isPlaceholderData } = useQuery({
+  key: () => ['contacts', Number(route.query.page) || 1],
+  query: () =>
+    fetch(`/api/contacts?page=${Number(route.query.page) || 1}`).then((res) => res.json()),
+  placeholderData: (previousData) => previousData,
+})
+</script>
+```
+
+<Note>
+`placeholderData` is not serialized during SSR. It is applied only on the client side after hydration.
+</Note>

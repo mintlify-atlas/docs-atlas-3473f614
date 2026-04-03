@@ -1,0 +1,249 @@
+---
+title: Writing plugins
+description: Learn how to write your own Pinia Colada plugin using the PiniaColadaPlugin interface, cache action subscriptions, and TypeScript module augmentation.
+---
+
+Plugins are install-time functions that subscribe to Pinia Colada cache actions, letting you observe and modify query and mutation lifecycles globally. You can use them without touching your components or the core library.
+
+This is powered by [Pinia's `$onAction()` subscriptions](https://pinia.vuejs.org/core-concepts/actions.html#Subscribing-to-actions). Under the hood, `useQuery()` and `useMutation()` are composables that trigger actions on their respective caches (`queryCache` and `mutationCache`). Plugins subscribe to those actions.
+
+## Plugin interface
+
+A plugin is a function that receives a `PiniaColadaPluginContext` and returns nothing:
+
+```ts
+export interface PiniaColadaPlugin {
+  (context: PiniaColadaPluginContext): void
+}
+```
+
+### PiniaColadaPluginContext
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `queryCache` | `QueryCache` | The query cache store. Powers `useQuery()` and all query utilities. |
+| `pinia` | `Pinia` | The Pinia instance. Use it to access other stores, including the mutation cache. |
+| `scope` | `EffectScope` | A Vue `EffectScope` for any reactive work your plugin creates (`ref()`, `watch()`, `computed()`). Effects created here are disposed when Pinia Colada is unmounted. |
+
+The mutation cache is **not** included directly in the context. This is intentional to allow tree-shaking. Opt in explicitly:
+
+```ts
+import { useMutationCache, type PiniaColadaPlugin } from '@pinia/colada'
+
+export function MyPlugin(): PiniaColadaPlugin {
+  return ({ pinia }) => {
+    const mutationCache = useMutationCache(pinia)
+    // ...
+  }
+}
+```
+
+## Plugin structure
+
+Plugins should be factory functions that accept options and return the plugin function:
+
+```ts
+import { type PiniaColadaPlugin } from '@pinia/colada'
+
+export interface MyPluginOptions {
+  /**
+   * Example option.
+   * @default 'default value'
+   */
+  foo?: string
+}
+
+export function MyPlugin(options: MyPluginOptions = {}): PiniaColadaPlugin {
+  return ({ queryCache, pinia, scope }) => {
+    // plugin implementation
+  }
+}
+```
+
+Register it when installing Pinia Colada:
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { MyPlugin } from './my-plugin'
+
+app.use(PiniaColada, {
+  plugins: [MyPlugin({ foo: 'custom' })],
+})
+```
+
+## Hooking into lifecycles with $onAction
+
+`$onAction()` gives you access to every cache action as it runs:
+
+```ts
+queryCache.$onAction(({ name, args, after, onError }) => {
+  if (name === 'fetch') {
+    const [entry] = args
+
+    after((result) => {
+      // runs after a successful fetch
+      console.log('Query succeeded', entry.key, result)
+    })
+
+    onError((error) => {
+      // runs when the fetch throws or rejects
+      console.error('Query failed', entry.key, error)
+    })
+  }
+})
+```
+
+### Query cache actions
+
+Most query plugins hook into one or more of these actions:
+
+| Action | When it fires | Typical use |
+| --- | --- | --- |
+| `extend(entry)` | Once per entry on first creation | Attach `entry.ext.*` fields |
+| `fetch(entry, options?)` | On every query execution | Observe success/error, schedule retries |
+| `setEntryState(entry, state)` | On every state change | React to any data or status update |
+| `remove(entry)` | When an entry is removed | Clean up timers or resources |
+| `ensure(options, previousEntry?)` | When `useQuery()` gets or creates an entry | Schedule initial work |
+
+### Mutation cache actions
+
+Mutation plugins similarly hook into:
+
+| Action | When it fires | Typical use |
+| --- | --- | --- |
+| `extend(entry)` | Immediately on `useMutation()` | Attach `entry.ext.*` fields |
+| `mutate(entry)` | On each `mutateAsync()` call | Observe mutation execution |
+| `setEntryState(entry, state)` | On every state change | React to success/error transitions |
+| `remove(entry)` | When an entry is removed | Cleanup |
+
+<Tip>
+  `fetch()` rethrows errors. If you only care about the final error exposed to the user, hook `setEntryState` instead and check `state.status === 'error'`.
+</Tip>
+
+## Pattern: logging plugin
+
+A simple plugin that logs every query fetch:
+
+```ts
+import type { PiniaColadaPlugin } from '@pinia/colada'
+
+export function PiniaColadaLogger(): PiniaColadaPlugin {
+  return ({ queryCache }) => {
+    queryCache.$onAction(({ name, args, after, onError }) => {
+      if (name !== 'fetch') return
+      const [entry] = args
+
+      console.log('[query] fetching', entry.key)
+
+      after(() => {
+        console.log('[query] success', entry.key)
+      })
+
+      onError((error) => {
+        console.warn('[query] error', entry.key, error)
+      })
+    })
+  }
+}
+```
+
+## Pattern: adding entry extensions
+
+Extensions are extra reactive properties stored on `entry.ext` that become available on `useQuery()` and `useMutation()` return values. Define them in the `extend` action.
+
+```ts
+import type { PiniaColadaPlugin } from '@pinia/colada'
+import { type ShallowRef, shallowRef } from 'vue'
+
+export function PiniaColadaDataUpdatedAt(): PiniaColadaPlugin {
+  return ({ queryCache, scope }) => {
+    queryCache.$onAction(({ name, args, after }) => {
+      if (name === 'extend') {
+        const [entry] = args
+        // Create reactive state inside scope so it's disposed with the entry
+        scope.run(() => {
+          entry.ext.dataUpdatedAt = shallowRef<number>(entry.when)
+        })
+      } else if (name === 'setEntryState') {
+        const [entry] = args
+        after(() => {
+          entry.ext.dataUpdatedAt.value = entry.when
+        })
+      }
+    })
+  }
+}
+
+declare module '@pinia/colada' {
+  interface UseQueryEntryExtensions<TData, TError, TDataInitial> {
+    /**
+     * Timestamp of the last data update.
+     */
+    dataUpdatedAt: ShallowRef<number>
+  }
+}
+```
+
+Use it in a component:
+
+```vue
+<script setup lang="ts">
+const { data, dataUpdatedAt } = useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+})
+</script>
+```
+
+<Note>
+  You must define all `entry.ext` fields during the `extend` action. You cannot add new keys later (e.g. in `fetch` or `setEntryState`). This ensures the fields are available on the return value from the very first render.
+</Note>
+
+## Pattern: adding custom options
+
+Use TypeScript module augmentation to add new options to `useQuery()` and `useMutation()`. Augment both the per-call interface and the global defaults interface.
+
+```ts
+export interface MyPluginOptions {
+  myOption?: boolean
+}
+
+declare module '@pinia/colada' {
+  // per-query options
+  interface UseQueryOptions<TData, TError, TDataInitial> extends MyPluginOptions {}
+  // global defaults (set via queryOptions in PiniaColada config)
+  interface UseQueryOptionsGlobal extends MyPluginOptions {}
+}
+```
+
+<Note>
+  You must preserve all generic type parameters (`TData`, `TError`, `TDataInitial`) even if you don't use them, or TypeScript will emit errors.
+</Note>
+
+Set global defaults when registering Pinia Colada:
+
+```ts main.ts
+app.use(PiniaColada, {
+  queryOptions: {
+    myOption: true,
+  },
+})
+```
+
+### Adding options to mutations
+
+```ts
+declare module '@pinia/colada' {
+  interface UseMutationOptions<TData, TVars, TError, TContext> extends MyPluginOptions {}
+  interface UseMutationOptionsGlobal extends MyPluginOptions {}
+}
+```
+
+## Naming conventions
+
+- Name your package with the `pinia-colada-plugin-` prefix (e.g. `pinia-colada-plugin-my-feature`).
+- Add `pinia-colada-plugin` to the `keywords` array in your `package.json` to help others discover it.
+
+<Tip>
+  Not sure where to start? Point an AI coding tool at the [delay plugin source](https://github.com/posva/pinia-colada/tree/main/plugins/delay) as a reference and ask it to generate a new plugin with your desired behavior.
+</Tip>

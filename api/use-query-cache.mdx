@@ -1,0 +1,362 @@
+---
+title: useQueryCache
+description: Access the query cache to imperatively invalidate, prefetch, read, and write cached query data.
+---
+
+Returns the active query cache instance. Use it to interact with the cache imperatively — outside of `useQuery` — for tasks like cache invalidation after mutations, prefetching, and optimistic updates.
+
+```typescript
+function useQueryCache(): QueryCache
+```
+
+`useQueryCache()` can be called in component `setup`, Pinia stores, navigation guards, or any other injectable context.
+
+## Usage
+
+```typescript
+import { useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+```
+
+## Related: `useQueryState`
+
+If you only need to **read** the reactive state of an existing cache entry (without triggering a fetch), use `useQueryState` instead:
+
+```typescript
+import { useQueryState } from '@pinia/colada'
+
+// Returns ComputedRefs for state, data, error, status, asyncStatus, and isPending
+// Does NOT trigger a fetch — reads existing cache state only
+const { data, status, isPending } = useQueryState(['users'])
+```
+
+This is useful for components that display data already fetched by a parent, or for showing a loading indicator based on whether a query is active elsewhere in the app.
+
+---
+
+## Methods
+
+### `invalidateQueries`
+
+Marks matching cache entries as stale and refetches all active ones.
+
+```typescript
+invalidateQueries(
+  filters?: UseQueryEntryFilter,
+  refetchActive?: boolean | 'all'
+): Promise<unknown>
+```
+
+<ParamField body="filters" type="UseQueryEntryFilter">
+  Filters to narrow which entries are invalidated. See [Filter options](#filter-options) below.
+</ParamField>
+
+<ParamField body="refetchActive" type="boolean | 'all'" default="true">
+  - `true` — refetch all active (mounted) queries matching the filter
+  - `false` — only mark as stale, do not trigger a refetch
+  - `'all'` — refetch all matching queries, including inactive ones
+</ParamField>
+
+```typescript
+const queryCache = useQueryCache()
+
+// Invalidate all todo queries
+await queryCache.invalidateQueries({ key: ['todos'] })
+
+// Invalidate and immediately refetch everything, including background entries
+await queryCache.invalidateQueries({}, 'all')
+
+// Only mark as stale without refetching
+await queryCache.invalidateQueries({ key: ['user'] }, false)
+```
+
+---
+
+### `setQueryData`
+
+Manually writes data to a cache entry and sets its status to `'success'`. If the entry does not exist, it is created.
+
+```typescript
+setQueryData<TData>(
+  key: EntryKey,
+  data: TData | ((oldData: TData | undefined) => TData)
+): void
+```
+
+<ParamField body="key" type="EntryKey" required>
+  The key of the cache entry to update. Must exactly match the key used in `useQuery`.
+</ParamField>
+
+<ParamField body="data" type="TData | ((oldData: TData | undefined) => TData)" required>
+  The new data value, or an updater function that receives the current data and returns the new value.
+</ParamField>
+
+```typescript
+// Set data directly
+queryCache.setQueryData(['user', 42], { id: 42, name: 'Alice' })
+
+// Update with a function (useful for optimistic updates)
+queryCache.setQueryData(['todos'], (old = []) => [
+  ...old,
+  { id: Date.now(), title: 'New todo', completed: false },
+])
+```
+
+---
+
+### `getQueryData`
+
+Reads the current data for a cache entry without subscribing to it.
+
+```typescript
+getQueryData<TData>(key: EntryKey): TData | undefined
+```
+
+<ParamField body="key" type="EntryKey" required>
+  The key of the cache entry to read.
+</ParamField>
+
+Returns `undefined` if no entry exists for the key or if the entry has no data yet.
+
+```typescript
+const user = queryCache.getQueryData<User>(['user', 42])
+
+if (user) {
+  console.log(user.name)
+}
+```
+
+---
+
+### `cancelQueries`
+
+Cancels any in-flight requests for matching cache entries by aborting their `AbortSignal`. The `asyncStatus` is immediately set to `'idle'`.
+
+```typescript
+cancelQueries(filters?: UseQueryEntryFilter, reason?: unknown): void
+```
+
+<ParamField body="filters" type="UseQueryEntryFilter">
+  Filters to narrow which queries are cancelled. See [Filter options](#filter-options) below.
+</ParamField>
+
+<ParamField body="reason" type="unknown">
+  Optional reason passed to `AbortController.abort()`.
+</ParamField>
+
+```typescript
+// Cancel all in-flight requests
+queryCache.cancelQueries()
+
+// Cancel a specific query
+queryCache.cancelQueries({ key: ['upload'] })
+```
+
+---
+
+### `prefetchQuery`
+
+Ensures a query entry is in the cache and fetches it if needed, without subscribing to it. Useful for prefetching data in navigation guards or before rendering a page.
+
+```typescript
+// Use ensure() to create the entry, then fetch() to populate it
+const entry = queryCache.ensure({
+  key: ['user', id],
+  query: () => fetchUser(id),
+})
+await queryCache.fetch(entry)
+```
+
+<Note>
+  `useQueryCache` does not expose a standalone `prefetchQuery` method. Use `ensure()` to create the cache entry and `fetch()` to trigger the request. The data is then available immediately when the component mounts.
+</Note>
+
+```typescript
+// In a navigation guard (Vue Router)
+router.beforeEach(async (to) => {
+  if (to.params.id) {
+    const entry = queryCache.ensure({
+      key: ['user', to.params.id],
+      query: () => fetchUser(to.params.id as string),
+    })
+    await queryCache.fetch(entry)
+  }
+})
+```
+
+---
+
+### `getQueryState`
+
+Retrieves the full cache entry for a given key, including its state, async status, and metadata.
+
+```typescript
+get<TData>(key: EntryKey): UseQueryEntry<TData> | undefined
+```
+
+Returns `undefined` if no entry exists for the key.
+
+```typescript
+const entry = queryCache.get(['user', 42])
+
+if (entry) {
+  console.log(entry.state.value.status) // 'pending' | 'success' | 'error'
+  console.log(entry.state.value.data)   // TData | undefined
+  console.log(entry.asyncStatus.value)  // 'idle' | 'loading'
+  console.log(entry.stale)              // boolean
+  console.log(entry.active)             // boolean — has active subscribers
+}
+```
+
+---
+
+### `setQueriesData`
+
+Updates the data for all cache entries matching a filter. Requires an updater function.
+
+```typescript
+setQueriesData<TData>(
+  filters: UseQueryEntryFilter,
+  updater: (previous: TData | undefined) => TData
+): void
+```
+
+```typescript
+// Optimistically update all matching contact list queries
+queryCache.setQueriesData<Contact[]>(
+  { key: ['contacts', 'list'] },
+  (contacts = []) => {
+    const index = contacts.findIndex((c) => c.id === updatedContact.id)
+    return contacts.toSpliced(index, 1, updatedContact)
+  },
+)
+```
+
+---
+
+### `getEntries`
+
+Returns all cache entries that match the given filters. Useful in plugins and advanced patterns where you need to iterate over a subset of the cache.
+
+```typescript
+getEntries(filters?: UseQueryEntryFilter): UseQueryEntry[]
+```
+
+<ParamField body="filters" type="UseQueryEntryFilter">
+  Filters to narrow which entries are returned. See [Filter options](#filter-options) below. If omitted, all entries are returned.
+</ParamField>
+
+```typescript
+// Get all active entries with errors
+const erroredEntries = queryCache.getEntries({
+  predicate: (entry) => entry.state.value.status === 'error',
+  active: true,
+})
+
+// Get all stale entries for a key prefix
+const staleUserEntries = queryCache.getEntries({
+  key: ['users'],
+  stale: true,
+})
+```
+
+---
+
+## Filter options
+
+Most methods accept a `UseQueryEntryFilter` object to target specific cache entries.
+
+<ParamField body="key" type="EntryKey">
+  Match entries whose key starts with the provided key (prefix match by default). Pass a partial key to match a subtree of the cache.
+
+  ```typescript
+  // Matches ['todos'], ['todos', 1], ['todos', 'list'], etc.
+  { key: ['todos'] }
+  ```
+</ParamField>
+
+<ParamField body="exact" type="boolean">
+  When `true`, only entries whose key exactly matches `key` are included. When `false` (default), prefix matching is used.
+
+  ```typescript
+  // Only matches exactly ['todos']
+  { key: ['todos'], exact: true }
+  ```
+</ParamField>
+
+<ParamField body="predicate" type="(entry: UseQueryEntry) => boolean">
+  A custom function to filter entries. Receives the full entry object and should return `true` to include it.
+
+  ```typescript
+  // Match only stale entries
+  { predicate: (entry) => entry.stale }
+
+  // Match entries in error state
+  { predicate: (entry) => entry.state.value.status === 'error' }
+  ```
+</ParamField>
+
+<ParamField body="stale" type="boolean">
+  Filter by staleness. `true` returns only stale entries, `false` returns only fresh ones.
+</ParamField>
+
+<ParamField body="active" type="boolean">
+  Filter by whether an entry has active subscribers. `true` returns only entries used by a mounted component or active effect scope.
+</ParamField>
+
+<ParamField body="status" type="'pending' | 'success' | 'error'">
+  Filter entries by their current `status`.
+</ParamField>
+
+---
+
+## Complete example
+
+```typescript
+import { useMutation, useQueryCache } from '@pinia/colada'
+
+interface Todo {
+  id: number
+  title: string
+  completed: boolean
+}
+
+export function useCreateTodo() {
+  const queryCache = useQueryCache()
+
+  return useMutation<Todo, { title: string }>({
+    onMutate({ title }) {
+      // Snapshot current state for rollback
+      const previous = queryCache.getQueryData<Todo[]>(['todos'])
+
+      // Optimistically add the new todo
+      queryCache.setQueryData<Todo[]>(['todos'], (old = []) => [
+        ...old,
+        { id: -Date.now(), title, completed: false },
+      ])
+
+      return { previous }
+    },
+
+    mutation: ({ title }) =>
+      fetch('/api/todos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      }).then((r) => r.json()),
+
+    onSuccess() {
+      // Invalidate to replace optimistic entry with real data
+      queryCache.invalidateQueries({ key: ['todos'] })
+    },
+
+    onError(_error, _vars, context) {
+      // Roll back optimistic update on failure
+      if (context?.previous) {
+        queryCache.setQueryData(['todos'], context.previous)
+      }
+    },
+  })
+}
+```

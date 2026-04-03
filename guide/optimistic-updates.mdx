@@ -1,0 +1,206 @@
+---
+title: Optimistic updates
+description: Update the UI instantly before a mutation completes, and roll back gracefully on error.
+---
+
+Optimistic updates let you reflect a mutation in the UI **before the server responds**, giving users an immediate sense of responsiveness. Pinia Colada supports two approaches: updating the cache directly, or rendering pending mutation state from the component.
+
+## Updating the cache directly
+
+Updating the query cache in `onMutate` is the most robust approach. Because the cache is shared, every component that reads the affected query will instantly see the new value. The tradeoff is that you must also handle rollback if the mutation fails.
+
+### How it works
+
+<Steps>
+  <Step title="Snapshot and apply">
+    In `onMutate`, read the current cached value with `queryCache.getQueryData()`, compute the optimistic value, write it back with `queryCache.setQueryData()`, and cancel any in-flight requests for that key so they cannot overwrite your optimistic data.
+  </Step>
+  <Step title="Settle">
+    In `onSettled` (called on both success and error), invalidate the query so the server's authoritative data is eventually fetched.
+  </Step>
+  <Step title="Roll back on error">
+    In `onError`, check that the value in the cache is still your optimistic snapshot (another mutation might have updated it in the meantime) and restore the previous value.
+  </Step>
+</Steps>
+
+### Contact update example
+
+```ts
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { patchContact } from '@/api/contacts'
+import type { Contact } from '@/api/contacts'
+
+const queryCache = useQueryCache()
+const { mutate } = useMutation({
+  mutation: patchContact,
+  // `contactInfo` type is inferred from the mutation function
+  onMutate(contactInfo) {
+    // get the current contact from the cache, we assume it exists
+    const oldContact = queryCache.getQueryData<Contact>(['contact', contactInfo.id])!
+    const newContact: Contact = {
+      // merge both objects to produce a complete contact
+      ...oldContact,
+      ...contactInfo,
+    }
+
+    // update the cache with the optimistic value
+    queryCache.setQueryData(['contact', newContact.id], newContact)
+    // cancel in-flight requests so they don't overwrite the optimistic data
+    queryCache.cancelQueries({ key: ['contact', newContact.id] })
+
+    // pass snapshot to the other hooks
+    return { oldContact, newContact }
+  },
+
+  // called on both success and error
+  onSettled(_data, _error, _vars, { newContact }) {
+    // `newContact` can be undefined if `onMutate` itself throws
+    if (newContact) {
+      queryCache.invalidateQueries({ key: ['contact', newContact.id] })
+    }
+  },
+
+  onError(err, contactInfo, { newContact, oldContact }) {
+    // only roll back if the optimistic value is still in the cache
+    if (newContact === queryCache.getQueryData(['contact', contactInfo.id])) {
+      queryCache.setQueryData(['contact', contactInfo.id], oldContact)
+    }
+    console.error(`Failed to update contact "${contactInfo.id}"`, err)
+  },
+
+  onSuccess(contact, _contactInfo, { newContact }) {
+    // replace the optimistic value with the server's authoritative data
+    queryCache.setQueryData(['contact', newContact.id], contact)
+  },
+})
+```
+
+### Todo list example
+
+The same pattern works for list mutations. Here, a new item is appended optimistically and replaced with the server response on success:
+
+```ts
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { createTodo } from './api/todos'
+import type { TodoItem } from './api/todos'
+
+const queryCache = useQueryCache()
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+  onMutate(text) {
+    const oldTodoList = queryCache.getQueryData<TodoItem[]>(['todos'])
+    const newTodoItem: TodoItem = {
+      text,
+      id: crypto.randomUUID(),
+    }
+    const newTodoList: TodoItem[] = [...(oldTodoList || []), newTodoItem]
+
+    queryCache.setQueryData(['todos'], newTodoList)
+    queryCache.cancelQueries({ key: ['todos'] })
+
+    return { newTodoList, oldTodoList, newTodoItem }
+  },
+
+  onSettled() {
+    queryCache.invalidateQueries({ key: ['todos'] })
+  },
+
+  onError(err, _title, { oldTodoList, newTodoList }) {
+    if (newTodoList === queryCache.getQueryData(['todos'])) {
+      queryCache.setQueryData(['todos'], oldTodoList)
+    }
+    console.error('Failed to create todo:', err)
+  },
+
+  onSuccess(todoItem, _vars, { newTodoItem }) {
+    const todoList = queryCache.getQueryData<TodoItem[]>(['todos']) || []
+    const todoIndex = todoList.findIndex((t) => t.id === newTodoItem.id)
+    if (todoIndex >= 0) {
+      const copy = todoList.slice()
+      copy.splice(todoIndex, 1, todoItem)
+      queryCache.setQueryData(['todos'], copy)
+    }
+  },
+})
+```
+
+<Tip>
+In large projects, use [key factories](/guide/query-keys) and [`defineQueryOptions()`](/advanced/reusable-queries) to make your query keys typed. This eliminates the possibility of a typo in a key string and lets `getQueryData()` / `setQueryData()` infer the data type automatically.
+</Tip>
+
+## Updating the UI directly
+
+When the mutation and the query it affects live in the same component, you can skip the cache entirely and display the pending mutation state inline. This is simpler but only works when the component is still mounted.
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useMutation, useQuery, useQueryCache } from '@pinia/colada'
+import { getTodoList, createTodo } from './api/todos'
+
+const { data: todoList } = useQuery({
+  key: ['todos'],
+  query: () => getTodoList(),
+})
+
+const newTodoText = ref('')
+const queryCache = useQueryCache()
+const { mutate, isLoading, variables: newTodo } = useMutation({
+  mutation: (text: string) => createTodo(text),
+  async onSettled() {
+    // wait for the refetch so the mutation stays in the loading state
+    await queryCache.invalidateQueries({ key: ['todos'] })
+  },
+})
+</script>
+
+<template>
+  <form @submit.prevent="mutate(newTodoText)">
+    <input v-model="newTodoText" :disabled="isLoading">
+    <button :disabled="isLoading">Add todo</button>
+  </form>
+
+  <ul v-if="todoList">
+    <li v-for="todo in todoList" :key="todo.id">{{ todo.text }}</li>
+    <!-- show the pending item while the mutation is in flight -->
+    <li v-if="isLoading" :style="{ opacity: 0.5 }">{{ newTodo }}</li>
+  </ul>
+</template>
+```
+
+The `variables` property on the mutation holds the last arguments passed to `mutate()`. Awaiting `invalidateQueries()` in `onSettled` keeps `isLoading` `true` until the refetch finishes, so the optimistic item disappears exactly when real data arrives.
+
+### Accessing mutation state from a sibling component
+
+If the mutation lives in a different component from the query, give the mutation a `key` and read its state from `useMutationCache()`:
+
+```ts
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { createTodo } from './api/todos'
+
+const queryCache = useQueryCache()
+const { mutate, isLoading, variables: newTodo } = useMutation({
+  key: ['createTodo'],
+  mutation: (text: string) => createTodo(text),
+  onSettled: () => queryCache.invalidateQueries({ key: ['todos'] }),
+})
+```
+
+```ts
+import { useMutationCache, useQuery } from '@pinia/colada'
+import { getTodoList } from './api/todos'
+
+const { data: todoList } = useQuery({
+  key: ['todos'],
+  query: () => getTodoList(),
+})
+
+const mutationCache = useMutationCache()
+const mutationState = computed(() => {
+  const mutation = mutationCache.getEntries({ key: ['createTodo'] })[0]
+  return {
+    isLoading: mutation?.asyncStatus.value === 'loading',
+    variables: mutation?.vars,
+  }
+})
+```

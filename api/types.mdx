@@ -1,0 +1,532 @@
+---
+title: 'Types & interfaces'
+description: 'Complete reference for all public types and interfaces exported by @pinia/colada.'
+---
+
+## Data state types
+
+These types represent the state of a query or mutation at any point in time.
+
+### `DataState`
+
+The union of all possible query data states.
+
+```ts
+type DataState<TData, TError, TDataInitial = undefined> =
+  | DataState_Success<TData, TDataInitial>
+  | DataState_Error<TData, TError, TDataInitial>
+  | DataState_Pending<TDataInitial>
+```
+
+<ResponseField name="data" type="TData | TDataInitial | undefined">
+  The last successfully resolved data. `undefined` when pending and no initial
+  data was provided.
+</ResponseField>
+
+<ResponseField name="error" type="TError | null">
+  The last rejected error. `null` when the status is `success` or `pending`.
+</ResponseField>
+
+<ResponseField name="status" type="DataStateStatus">
+  Current status: `'pending'`, `'success'`, or `'error'`.
+</ResponseField>
+
+### `DataState_Pending`
+
+```ts
+interface DataState_Pending<TDataInitial> {
+  status: 'pending'
+  data: TDataInitial
+  error: null
+}
+```
+
+Initial state before the first successful fetch. `data` is `TDataInitial`
+(defaults to `undefined` when no `initialData` is provided).
+
+### `DataState_Success`
+
+```ts
+interface DataState_Success<TData, TDataInitial> {
+  status: 'success'
+  data: TData | Exclude<TDataInitial, undefined>
+  error: null
+}
+```
+
+State after the query resolves. `error` is always `null`.
+
+### `DataState_Error`
+
+```ts
+interface DataState_Error<TData, TError, TDataInitial> {
+  status: 'error'
+  data: TData | TDataInitial
+  error: TError
+}
+```
+
+State when the query throws. `data` retains the previous value if one exists.
+
+### `DataStateStatus`
+
+```ts
+type DataStateStatus = 'pending' | 'error' | 'success'
+```
+
+- `'pending'` — initial state, no data yet
+- `'success'` — data is available
+- `'error'` — the last fetch threw
+
+### `AsyncStatus`
+
+```ts
+type AsyncStatus = 'idle' | 'loading'
+```
+
+Tracks whether a fetch or mutation is currently in flight, independent of the
+data status.
+
+- `'idle'` — no active request
+- `'loading'` — a request is running
+
+---
+
+## Entry key types
+
+### `EntryKey`
+
+```ts
+type EntryKey = readonly JSONValue[]
+```
+
+The key used to identify a query or mutation in the cache. Must be a
+JSON-serializable array of primitives or plain objects. Keys are serialized
+internally using `JSON.stringify` with sorted object keys, so `{ a: 1, b: 2 }`
+and `{ b: 2, a: 1 }` produce the same cache entry.
+
+```ts
+// Valid entry keys
+const key1: EntryKey = ['todos']
+const key2: EntryKey = ['todos', { filter: 'active' }]
+const key3: EntryKey = ['user', 42]
+```
+
+### `EntryKeyTagged`
+
+```ts
+type EntryKeyTagged<
+  TData,
+  TError = ErrorDefault,
+  TDataInitial extends TData | undefined = undefined,
+> = EntryKey & {
+  [ENTRY_DATA_TAG]: TData
+  [ENTRY_ERROR_TAG]: TError
+  [ENTRY_DATA_INITIAL_TAG]: TDataInitial
+}
+```
+
+An `EntryKey` with phantom type symbols attached. Produced by
+`defineQueryOptions()` and consumed by `queryCache.getQueryData()` and
+`queryCache.setQueryData()` to infer the correct data type without manual
+assertions.
+
+### `toCacheKey()`
+
+```ts
+function toCacheKey(key: EntryKey): string
+function toCacheKey(key: undefined): undefined
+function toCacheKey(key: EntryKey | undefined): string | undefined
+```
+
+Serializes an `EntryKey` to a stable string. Object keys are sorted before
+serializing, so the result is the same regardless of insertion order.
+
+```ts
+import { toCacheKey } from '@pinia/colada'
+
+toCacheKey(['todos', { filter: 'active' }])
+// => '["todos",{"filter":"active"}]'
+```
+
+---
+
+## Module augmentation interfaces
+
+Augment these interfaces to customize global types used throughout the library.
+
+### `TypesConfig`
+
+Extend `TypesConfig` to replace the default error type and add structured
+metadata to queries and mutations.
+
+```ts
+// src/types-extension.ts
+interface TypesConfig {
+  // defaultError:
+}
+
+// Inferred from TypesConfig:
+type ErrorDefault = TypesConfig extends Record<'defaultError', infer E> ? E : Error
+type QueryMeta    = TypesConfig extends Record<'queryMeta', infer M>    ? M : Record<string, unknown>
+type MutationMeta = TypesConfig extends Record<'mutationMeta', infer M> ? M : Record<string, unknown>
+```
+
+#### Custom error type
+
+```ts
+// types-extension.d.ts
+import '@pinia/colada'
+
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    defaultError: ApiError  // replaces the default `Error` type
+  }
+}
+
+export {}
+```
+
+#### Custom query and mutation metadata
+
+```ts
+// types-extension.d.ts
+import '@pinia/colada'
+
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    queryMeta: {
+      /** Message shown in the error toast on failure */
+      onErrorMessage?: string
+    }
+    mutationMeta: {
+      /** Optimistic update rollback function */
+      rollback?: () => void
+    }
+  }
+}
+
+export {}
+```
+
+After augmenting, the `meta` field in `useQuery()` and `useMutation()` is typed accordingly:
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+  meta: {
+    onErrorMessage: 'Failed to load todos',
+  },
+})
+```
+
+### `QueryMeta`
+
+```ts
+type QueryMeta = TypesConfig extends Record<'queryMeta', infer M>
+  ? M
+  : Record<string, unknown>
+```
+
+The resolved type for `meta` in `useQuery()` / `defineQuery()` options and
+`UseQueryEntry.meta`. Defaults to `Record<string, unknown>`.
+
+### `MutationMeta`
+
+```ts
+type MutationMeta = TypesConfig extends Record<'mutationMeta', infer M>
+  ? M
+  : Record<string, unknown>
+```
+
+The resolved type for `meta` in `useMutation()` / `defineMutation()` options
+and `UseMutationEntry.meta`. Defaults to `Record<string, unknown>`.
+
+---
+
+## Cache types
+
+### `QueryCache`
+
+```ts
+type QueryCache = ReturnType<typeof useQueryCache>
+```
+
+The Pinia store that holds all query entries. Returned by `useQueryCache()`.
+
+Key methods:
+
+| Method | Description |
+|--------|-------------|
+| `getQueryData(key)` | Read data for a key without subscribing |
+| `setQueryData(key, data)` | Write data directly into the cache |
+| `setQueriesData(filters, updater)` | Update multiple entries at once |
+| `invalidateQueries(filters?)` | Mark entries stale and optionally refetch |
+| `cancelQueries(filters?)` | Abort pending requests |
+| `getEntries(filters?)` | List matching cache entries |
+| `prefetchQuery(options)` | Fetch in advance without a component |
+| `ensure(options)` | Ensure an entry exists in the cache |
+| `fetch(entry)` | Force-fetch an entry |
+| `refresh(entry)` | Fetch only if data is stale |
+| `invalidate(entry)` | Mark a single entry stale |
+| `remove(entry)` | Remove an entry from the cache |
+
+```ts
+import { useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+
+// Read cached data without triggering a fetch
+const todos = queryCache.getQueryData(['todos'])
+
+// Write directly into the cache
+queryCache.setQueryData(['todos'], updatedTodos)
+
+// Invalidate and refetch all active todo queries
+await queryCache.invalidateQueries({ key: ['todos'] })
+```
+
+### `MutationCache`
+
+```ts
+type MutationCache = ReturnType<typeof useMutationCache>
+```
+
+The Pinia store that holds all mutation entries. Returned by `useMutationCache()`.
+
+Key methods:
+
+| Method | Description |
+|--------|-------------|
+| `getEntries(filters?)` | List matching mutation entries |
+| `get(id)` | Get a single entry by its numeric id |
+| `remove(entry)` | Remove an entry from the cache |
+
+### `UseQueryEntry`
+
+A single query entry stored in the `QueryCache`.
+
+```ts
+interface UseQueryEntry<
+  TData = unknown,
+  TError = unknown,
+  TDataInitial extends TData | undefined = undefined,
+> {
+  state: ShallowRef<DataState<TData, TError, TDataInitial>>
+  asyncStatus: ShallowRef<AsyncStatus>
+  key: EntryKey
+  keyHash: string
+  when: number
+  options: UseQueryOptionsWithDefaults<TData, TError, TDataInitial> | null
+  meta: QueryMeta
+  placeholderData: TDataInitial | TData | null | undefined
+  pending: null | { abortController: AbortController; refreshCall: Promise<...>; when: number }
+  deps: Set<EffectScope | ComponentInternalInstance>
+  gcTimeout: ReturnType<typeof setTimeout> | undefined
+  readonly stale: boolean
+  readonly active: boolean
+  readonly ext: UseQueryEntryExtensions<TData, TError, TDataInitial>
+}
+```
+
+<ResponseField name="state" type="ShallowRef<DataState<TData, TError, TDataInitial>>">
+  Reactive data state. Contains `data`, `error`, and `status`.
+</ResponseField>
+
+<ResponseField name="asyncStatus" type="ShallowRef<AsyncStatus>">
+  Whether a request is currently in flight (`'loading'`) or not (`'idle'`).
+</ResponseField>
+
+<ResponseField name="key" type="EntryKey">
+  The key associated with this entry.
+</ResponseField>
+
+<ResponseField name="keyHash" type="string">
+  Serialized version of `key`, used as the cache map key.
+</ResponseField>
+
+<ResponseField name="when" type="number">
+  Unix timestamp (ms) of the last data update. `0` if the entry has been
+  invalidated or never fetched.
+</ResponseField>
+
+<ResponseField name="stale" type="boolean">
+  `true` when `Date.now() >= when + staleTime` or when `when === 0`.
+</ResponseField>
+
+<ResponseField name="active" type="boolean">
+  `true` when at least one component or effect scope is using this entry.
+</ResponseField>
+
+<ResponseField name="meta" type="QueryMeta">
+  Resolved metadata for this query entry.
+</ResponseField>
+
+<ResponseField name="ext" type="UseQueryEntryExtensions<TData, TError, TDataInitial>">
+  Extension object for plugin-added properties.
+</ResponseField>
+
+### `UseMutationEntry`
+
+A single mutation entry stored in the `MutationCache`.
+
+```ts
+interface UseMutationEntry<
+  TData = unknown,
+  TVars = unknown,
+  TError = unknown,
+  TContext extends Record<any, any> = {},
+> {
+  id: number
+  state: ShallowRef<DataState<TData, TError>>
+  asyncStatus: ShallowRef<AsyncStatus>
+  when: number
+  key: EntryKey | undefined
+  meta: MutationMeta
+  vars: TVars | undefined
+  options: UseMutationOptionsWithDefaults<TData, TVars, TError, TContext>
+  gcTimeout: ReturnType<typeof setTimeout> | undefined
+  readonly ext: UseMutationEntryExtensions<TData, TVars, TError, TContext>
+}
+```
+
+<ResponseField name="id" type="number">
+  Unique numeric id assigned when the entry is ensured. `0` if the entry has
+  not yet been placed in the cache.
+</ResponseField>
+
+<ResponseField name="state" type="ShallowRef<DataState<TData, TError>>">
+  Reactive mutation state.
+</ResponseField>
+
+<ResponseField name="vars" type="TVars | undefined">
+  The variables passed to the most recent `mutate()` call.
+</ResponseField>
+
+<ResponseField name="key" type="EntryKey | undefined">
+  Optional key identifying this mutation entry. `undefined` if no `key` option
+  was provided.
+</ResponseField>
+
+### `UseQueryEntryFilter`
+
+```ts
+type UseQueryEntryFilter = EntryFilter<UseQueryEntry>
+```
+
+Passed to `queryCache.getEntries()`, `queryCache.invalidateQueries()`, and
+`queryCache.cancelQueries()` to select a subset of cache entries.
+
+```ts
+interface EntryFilter_Base {
+  /** Partial key match — include entries whose key contains this key as a prefix */
+  key?: EntryKey
+  /** Exact key match only */
+  exact?: boolean
+  /** Filter by data status */
+  status?: DataStateStatus
+  /** Arbitrary predicate function */
+  predicate?: (entry: UseQueryEntry) => boolean
+}
+
+// Additional query-specific filters:
+interface UseQueryEntryFilter extends EntryFilter_Base {
+  /** Filter by stale/fresh */
+  stale?: boolean
+  /** Filter by active/inactive */
+  active?: boolean
+}
+```
+
+```ts
+// All active, stale todo entries
+queryCache.getEntries({ key: ['todos'], active: true, stale: true })
+
+// Exact match only
+queryCache.getEntries({ key: ['user', 1], exact: true })
+
+// Custom predicate
+queryCache.getEntries({
+  predicate: (entry) => entry.state.value.status === 'error',
+})
+```
+
+### `UseMutationEntryFilter`
+
+```ts
+type UseMutationEntryFilter = EntryFilter<UseMutationEntry>
+```
+
+Passed to `mutationCache.getEntries()` to filter mutation entries. Supports
+`key`, `exact`, `status`, and `predicate` fields.
+
+---
+
+## Plugin types
+
+### `PiniaColadaPlugin`
+
+```ts
+interface PiniaColadaPlugin {
+  (context: PiniaColadaPluginContext): void
+}
+```
+
+A Pinia Colada plugin is a function that receives the plugin context and
+optionally hooks into the query cache lifecycle via `queryCache.$onAction()`.
+
+### `PiniaColadaPluginContext`
+
+```ts
+interface PiniaColadaPluginContext {
+  /** The query cache used by the application */
+  queryCache: QueryCache
+  /** The Pinia instance */
+  pinia: Pinia
+  /** An effect scope for reactive side effects */
+  scope: EffectScope
+}
+```
+
+<ResponseField name="queryCache" type="QueryCache">
+  The query cache store. Use `queryCache.$onAction()` to hook into actions like
+  `fetch`, `ensure`, `invalidate`, and `remove`.
+</ResponseField>
+
+<ResponseField name="pinia" type="Pinia">
+  The active Pinia instance.
+</ResponseField>
+
+<ResponseField name="scope" type="EffectScope">
+  A Vue effect scope. Create `ref()`, `computed()`, or `watch()` inside this
+  scope so they are automatically cleaned up when the app unmounts.
+</ResponseField>
+
+#### Plugin example
+
+```ts
+import type { PiniaColadaPlugin } from '@pinia/colada'
+
+export function retryPlugin(maxRetries = 3): PiniaColadaPlugin {
+  return ({ queryCache, scope }) => {
+    const retryCounts = scope.run(() => new Map<string, number>())!
+
+    queryCache.$onAction(({ name, args, onError }) => {
+      if (name !== 'fetch') return
+      const [entry] = args
+
+      onError(async () => {
+        const count = (retryCounts.get(entry.keyHash) ?? 0) + 1
+        retryCounts.set(entry.keyHash, count)
+
+        if (count < maxRetries) {
+          await queryCache.fetch(entry)
+        } else {
+          retryCounts.delete(entry.keyHash)
+        }
+      })
+    })
+  }
+}
+```

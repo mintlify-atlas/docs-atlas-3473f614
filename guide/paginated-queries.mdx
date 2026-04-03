@@ -1,0 +1,73 @@
+---
+title: Paginated queries
+description: Fetch discrete pages of data with reactive keys, and keep the previous page visible during transitions with placeholderData.
+---
+
+Pinia Colada treats paginated queries as regular queries where **the page number is part of the key**. Each page gets its own independent cache entry. When the user navigates to a new page, the key changes, a new entry is created, and a fresh fetch is initiated.
+
+## Basic paginated query
+
+Include the page in the `key` as a function so the query is reactive:
+
+```vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+
+const route = useRoute()
+const { state } = useQuery({
+  key: () => ['contacts', Number(route.query.page) || 1],
+  query: () =>
+    fetch(`/api/contacts?page=${Number(route.query.page) || 1}`).then((res) => res.json()),
+})
+</script>
+```
+
+<Note>
+Always pass a function to `key`, not a plain value. A function makes the key reactive so the query automatically refetches when the page changes.
+</Note>
+
+When the key changes, a **new cache entry is created**. If the user visits the same page twice, Pinia Colada reuses the cached entry and skips the network request.
+
+## Keeping the previous page visible
+
+By default, `state.data` becomes `undefined` the moment the key changes (because the new entry starts in the `pending` state). This causes a layout flash between pages.
+
+Pass `placeholderData` to carry the previous page's data forward until the new page arrives:
+
+```vue
+<script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+
+const route = useRoute()
+const { state } = useQuery({
+  key: () => ['contacts', Number(route.query.page) || 1],
+  query: () =>
+    fetch(`/api/contacts?page=${Number(route.query.page) || 1}`).then((res) => res.json()),
+  placeholderData: (previousData) => previousData,
+})
+</script>
+```
+
+With `placeholderData` set, `state.status` reports `'success'` and `state.data` contains the previous page's data while the new page is loading. The `asyncStatus` will be `'loading'` during this window, so you can still show a subtle loading indicator without hiding the content.
+
+<Tip>
+`placeholderData` is not serialized during SSR — it is purely a client-side UX enhancement.
+</Tip>
+
+## Differences from infinite queries
+
+<AccordionGroup>
+  <Accordion title="Separate cache entries vs. merged entries">
+    Each paginated query page is a separate cache entry keyed by its page number. Infinite queries merge all pages into a single entry under one key.
+  </Accordion>
+  <Accordion title="Independent invalidation">
+    With paginated queries you can invalidate or refetch a single page without affecting others. Invalidating an infinite query invalidates every loaded page at once.
+  </Accordion>
+  <Accordion title="Navigation model">
+    Paginated queries suit numbered navigation (previous/next, page picker). Infinite queries suit append-only UIs (infinite scroll, "load more" buttons).
+  </Accordion>
+</AccordionGroup>
+
+For infinite scrolling and "load more" behavior, use [`useInfiniteQuery()`](/guide/infinite-queries) instead.

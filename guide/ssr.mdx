@@ -1,0 +1,122 @@
+---
+title: Server-side rendering
+description: "Use Pinia Colada with SSR: automatic prefetching, cache serialization, hydration, and lazy queries."
+---
+
+Pinia Colada is built on top of Pinia, so the foundation for SSR is [Pinia's SSR guide](https://pinia.vuejs.org/ssr/). On top of that, Pinia Colada stores query data in a custom tree structure that requires its own serialization step.
+
+## Automatic `onServerPrefetch`
+
+When `useQuery()` is called inside a component's `setup`, Pinia Colada automatically registers an `onServerPrefetch` hook. You do not need to `await` the query manually — the component will wait for the data before the server renders its HTML.
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+// no await needed — the server waits for this automatically
+const { data } = useQuery({
+  key: ['contacts'],
+  query: () => fetch('/api/contacts').then(r => r.json()),
+})
+</script>
+```
+
+## Cache serialization and hydration
+
+The Nuxt module handles serialization automatically. For a custom SSR setup you need to serialize the cache on the server and rehydrate it on the client.
+
+Pinia Colada exposes three helpers for this:
+
+- `isQueryCache(value)` — type guard to identify the cache store
+- `serializeQueryCache(cache)` — converts the cache to a plain JSON-serializable object
+- `hydrateQueryCache(cache, serialized)` — restores the cache on the client
+
+### Using devalue
+
+If you use [devalue](https://github.com/Rich-Harris/devalue) (recommended), register the cache as a custom type:
+
+```ts
+import devalue from 'devalue'
+import { markRaw } from 'vue'
+import { isQueryCache, serializeQueryCache, hydrateQueryCache } from '@pinia/colada'
+
+// --- server ---
+const stringified = devalue.stringify(useQueryCache(pinia), {
+  PiniaColada_TreeMapNode: (data: unknown) =>
+    isQueryCache(data) && serializeQueryCache(data),
+})
+
+// --- client ---
+const revivedData = devalue.parse(stringified, {
+  PiniaColada_TreeMapNode: (data: ReturnType<typeof serializeQueryCache>) => data,
+})
+
+// install Pinia and PiniaColada before hydrating
+app.use(pinia)
+app.use(PiniaColada)
+hydrateQueryCache(useQueryCache(pinia), revivedData)
+```
+
+You can find a full implementation in the [Nuxt module source](https://github.com/posva/pinia-colada/blob/main/nuxt/src/runtime/plugin.ts).
+
+## Nuxt integration
+
+If you are using Nuxt, install the official Nuxt module instead of wiring up serialization manually. It handles everything automatically.
+
+See the [Nuxt integration guide](/nuxt) for setup instructions.
+
+## Lazy queries (server-skipped queries)
+
+Use the `enabled` option to prevent a query from executing on the server:
+
+```ts
+import { useQuery } from '@pinia/colada'
+
+useQuery({
+  key: ['restaurants', { search: true }],
+  query: () => findRestaurants(),
+  // only runs in the browser
+  enabled: typeof document !== 'undefined',
+})
+```
+
+In a Vite environment you can also use `!import.meta.env.SSR`:
+
+```ts
+useQuery({
+  key: ['restaurants'],
+  query: () => findRestaurants(),
+  enabled: !import.meta.env.SSR,
+})
+```
+
+Disabled queries are not awaited during `onServerPrefetch` and are not included in the serialized cache.
+
+## Custom error serialization
+
+Plain `Error` objects are not serializable by default. If you want errors from failed server-side queries to be available on the client, you must serialize them explicitly.
+
+With devalue:
+
+```ts
+import devalue from 'devalue'
+import { MyError } from '~/errors'
+
+// server: stringify
+const stringified = devalue.stringify(error, {
+  MyError: (data: unknown) =>
+    data instanceof MyError && [data.message, data.customData],
+})
+
+// client: parse
+const revivedData = devalue.parse(stringified, {
+  MyError: ([message, customData]: [string, unknown]) =>
+    new MyError(message, customData),
+})
+```
+
+Register the same reducer/reviver pair for your custom error type wherever you call `devalue.stringify` / `devalue.parse`.
+
+<Warning>
+If you serialize errors without a custom reviver, they will arrive on the client as plain objects and lose their prototype chain and methods.
+</Warning>

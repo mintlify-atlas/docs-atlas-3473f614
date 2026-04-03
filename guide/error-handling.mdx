@@ -1,0 +1,327 @@
+---
+title: Error handling
+description: Capture, display, and react to errors in queries and mutations — with global hooks, TypeScript narrowing, and strategies for non-throwing APIs.
+---
+
+Pinia Colada captures errors thrown or rejected by your `query` and `mutation` functions and exposes them through the `error` ref and `status` discriminated union. You never need a `try/catch` block in most cases — the library handles it for you.
+
+## Error state in queries
+
+When a query function throws or rejects, Pinia Colada sets `status` to `'error'` and stores the thrown value in `error`. The `data` from the previous successful fetch is preserved so you can show stale data alongside an error indicator.
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+const { data, error, status } = useQuery({
+  key: ['user-profile'],
+  query: () => fetch('/api/profile').then((r) => r.json()),
+})
+</script>
+
+<template>
+  <div v-if="error">
+    <p>Something went wrong: {{ error.message }}</p>
+  </div>
+  <div v-else-if="data">
+    <p>Hello, {{ data.name }}</p>
+  </div>
+  <div v-else>
+    <p>Loading...</p>
+  </div>
+</template>
+```
+
+<Tip>
+When a refetch fails, `error` is set but the previous `data` is kept. Show the stale data alongside an error banner rather than replacing the entire UI.
+</Tip>
+
+### The `status` lifecycle
+
+| `status`    | `data`                 | `error`   |
+| ----------- | ---------------------- | --------- |
+| `'pending'` | `undefined`            | `null`    |
+| `'success'` | defined                | `null`    |
+| `'error'`   | `undefined` or defined | defined   |
+
+## Error state in mutations
+
+`useMutation()` exposes the same `error` and `status` refs. The key difference is in how `mutate` and `mutateAsync` handle errors:
+
+- **`mutate()`** — swallows errors. The error is stored in the `error` ref and passed to `onError` hooks, but it is **not** rethrown. Safe to call in templates without a `.catch()`.
+- **`mutateAsync()`** — rethrows the error after running hooks. Wrap it in `try/catch`.
+
+```vue
+<script setup lang="ts">
+import { useMutation } from '@pinia/colada'
+
+const { mutate, error, reset } = useMutation({
+  mutation: (name: string) =>
+    fetch('/api/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+})
+</script>
+
+<template>
+  <form @submit.prevent="mutate('Eduardo')">
+    <div v-if="error">
+      <p>{{ error.message }}</p>
+      <button type="button" @click="reset()">Dismiss</button>
+    </div>
+    <button>Save</button>
+  </form>
+</template>
+```
+
+`reset()` clears `error` and `data`, returning the mutation to its initial `'pending'` state.
+
+## Reacting to errors with hooks
+
+Use mutation hooks to respond to errors outside the template. `onError` receives the error, the variables, and the context from `onMutate`:
+
+```ts
+import { useMutation } from '@pinia/colada'
+
+const { mutate } = useMutation({
+  mutation: (name: string) =>
+    fetch('/api/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  onError(error, vars, context) {
+    toast.error(`Failed to update name to "${vars}"`)
+  },
+  onSettled() {
+    // Runs after both success and error
+  },
+})
+```
+
+The `context` argument contains whatever you returned from `onMutate`. This is useful for rolling back [optimistic updates](/guide/query-invalidation#optimistic-updates-combined-with-invalidation) on failure.
+
+## Global error handling
+
+### Mutations
+
+Set global hooks for all mutations via `mutationOptions` when installing Pinia Colada:
+
+```ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+
+const app = createApp({})
+app.use(createPinia())
+app.use(PiniaColada, {
+  mutationOptions: {
+    onError(error) {
+      if (error instanceof Error) {
+        toast.error(error.message)
+      } else {
+        console.error('Unexpected error:', error)
+      }
+    },
+  },
+})
+```
+
+<Warning>
+A global handler fires for every mutation failure. Avoid showing a toast for every error — filter by type or use less intrusive UI (a status bar, for example).
+</Warning>
+
+### Queries
+
+Use `PiniaColadaQueryHooksPlugin` for global query error hooks. The `onError` callback receives both the error and the cache entry, so you can read `entry.meta` for per-query context:
+
+```ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { PiniaColada, PiniaColadaQueryHooksPlugin } from '@pinia/colada'
+
+const app = createApp({})
+app.use(createPinia())
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaQueryHooksPlugin({
+      onError(_error, entry) {
+        if (entry.meta?.errorMessage) {
+          toast.error(entry.meta.errorMessage as string)
+        }
+      },
+    }),
+  ],
+})
+```
+
+Attach per-query context with `meta`:
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: () => fetchTodos(),
+  meta: {
+    errorMessage: 'Failed to load the todo list',
+  },
+})
+```
+
+## Handling non-throwing API errors
+
+`fetch` and many typed API clients do not throw on non-2xx responses — they return a response object with a status code. Pinia Colada only sets `status === 'error'` for **thrown or rejected** values. You have three options:
+
+<AccordionGroup>
+  <Accordion title="Throw in the query function">
+
+Check the response status and throw explicitly. This gives you a strongly-typed error class.
+
+```ts
+import { useQuery } from '@pinia/colada'
+
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+const { data, error } = useQuery({
+  key: ['todos'],
+  query: async () => {
+    const response = await fetch('/api/todos')
+    if (!response.ok) {
+      throw new ApiError(response.status, response.statusText)
+    }
+    return response.json()
+  },
+})
+```
+
+  </Accordion>
+  <Accordion title="Keep errors in data">
+
+Return the full response in `data` and handle non-OK statuses in the template. This is a good fit for typed API clients (ts-rest, oRPC) that encode error shapes in the response type.
+
+```ts
+const { data } = useQuery({
+  key: ['todos'],
+  query: async () => {
+    const result = await typedApi.getTodos()
+    // result.status is 200 | 404 | 500, etc.
+    return result
+  },
+})
+```
+
+```vue-html
+<template>
+  <div v-if="data?.status === 200">{{ data.body }}</div>
+  <div v-else-if="data">Unexpected status: {{ data.status }}</div>
+</template>
+```
+
+  </Accordion>
+  <Accordion title="Intercept with a plugin">
+
+Intercept `setEntryState` in a Pinia Colada plugin to convert non-OK responses to error states globally, without changing individual query functions.
+
+```ts
+// plugin-api-errors.ts
+import type { PiniaColadaPlugin } from '@pinia/colada'
+
+function isApiError(data: unknown): data is { status: number } {
+  return (
+    !!data &&
+    typeof data === 'object' &&
+    'status' in data &&
+    typeof data.status === 'number' &&
+    data.status >= 400
+  )
+}
+
+export const PiniaColadaApiErrorPlugin: PiniaColadaPlugin = ({ queryCache }) => {
+  queryCache.$onAction(({ name, args, after }) => {
+    if (name === 'setEntryState') {
+      after(() => {
+        const entry = args[0]
+        const state = entry.state.value
+        if (state.status === 'success' && isApiError(state.data)) {
+          entry.state.value = {
+            status: 'error',
+            error: new Error(`API error: ${state.data.status}`),
+            data: state.data,
+          }
+        }
+      })
+    }
+  })
+}
+```
+
+  </Accordion>
+</AccordionGroup>
+
+## Retrying failed queries
+
+The [Retry plugin](../plugins/official/retry) adds automatic retries with configurable retry count, delay, and error-type filtering. It retries the `query` function before surfacing the error to your UI.
+
+## Typing errors
+
+### Default error type
+
+All errors are typed as `Error` by default, via the `ErrorDefault` type alias. Override this globally by augmenting `TypesConfig`:
+
+```ts
+import '@pinia/colada'
+
+export interface MyCustomError extends Error {
+  code: number
+}
+
+declare module '@pinia/colada' {
+  interface TypesConfig {
+    defaultError: MyCustomError
+  }
+}
+```
+
+After this, the `error` ref across all queries and mutations is typed as `MyCustomError` unless overridden locally.
+
+<Tip>
+Set `defaultError` to `unknown` to force explicit narrowing everywhere and eliminate accidental `error.message` access on non-Error values.
+</Tip>
+
+### Narrowing with `state`
+
+The `state` returned by `useQuery()` and `useMutation()` is a discriminated union on `status`. Checking `state.status` narrows `error` automatically:
+
+```ts
+import { useQuery } from '@pinia/colada'
+
+const { state } = useQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos').then((r) => r.json()),
+})
+
+const current = state.value
+if (current.status === 'error') {
+  // current.error is narrowed — no null check needed
+  console.error(current.error.message)
+}
+```
+
+### Narrowing with `instanceof`
+
+Errors cannot be typed per-query at the type level. Narrow them with `instanceof` at the point of use:
+
+```vue-html
+<template>
+  <ForbiddenError v-if="error instanceof AuthError" :error="error" />
+  <div v-else-if="error">{{ error.message }}</div>
+</template>
+```
+
+Always include a fallback branch for errors that don't match your expected types.

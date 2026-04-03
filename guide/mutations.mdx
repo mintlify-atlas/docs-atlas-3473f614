@@ -1,0 +1,322 @@
+---
+title: Mutations
+description: Trigger and track async write operations with useMutation — lifecycle hooks, cache invalidation, and optimistic updates included.
+---
+
+Mutations trigger and track the status of async operations that have side effects. While [queries](/guide/queries) **read** data, mutations **write** it. In REST terms, queries handle `GET` requests and mutations handle `POST`, `PUT`, `PATCH`, and `DELETE`.
+
+Mutations are created with `useMutation()`.
+
+## Basic usage
+
+The only required option is `mutation` — an async function that performs the operation. The function receives the variables you pass when calling `mutate()` or `mutateAsync()`.
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useMutation } from '@pinia/colada'
+
+const {
+  mutate: createTodo,
+  status,
+  asyncStatus,
+} = useMutation({
+  mutation: (todoText: string) =>
+    fetch('/api/todos', {
+      method: 'POST',
+      body: JSON.stringify({ text: todoText }),
+    }),
+})
+
+const todoText = ref('')
+</script>
+
+<template>
+  <form @submit.prevent="createTodo(todoText)">
+    <input v-model="todoText" />
+    <button :disabled="asyncStatus === 'loading'">Add todo</button>
+  </form>
+</template>
+```
+
+## Mutations vs queries
+
+| Feature               | Query                        | Mutation                         |
+| --------------------- | ---------------------------- | -------------------------------- |
+| Purpose               | Read data                    | Write / side-effect              |
+| Triggered             | Automatically (reactive)     | Manually (`mutate` / `mutateAsync`) |
+| Caching               | Yes, shared by key           | No (per instance)                |
+| Deduplication         | Yes                          | No                               |
+| Lifecycle hooks       | Global via plugin            | `onMutate`, `onSuccess`, `onError`, `onSettled` |
+
+## Return values
+
+`useMutation()` returns the following:
+
+| Property      | Type                              | Description                                                                    |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| `mutate`      | `(vars) => void`                  | Calls the mutation. Swallows errors (sets `error` ref instead of rethrowing).  |
+| `mutateAsync` | `(vars) => Promise<TData>`        | Calls the mutation and returns a promise. Rethrows errors.                     |
+| `state`       | `ComputedRef<DataState>`          | Discriminated union of `status`, `data`, and `error`.                          |
+| `status`      | `ShallowRef<DataStateStatus>`     | `'pending'`, `'success'`, or `'error'`.                                        |
+| `asyncStatus` | `ShallowRef<AsyncStatus>`         | `'idle'` or `'loading'`.                                                       |
+| `data`        | `ShallowRef<TData \| undefined>`  | Result of the last successful mutation.                                        |
+| `error`       | `ShallowRef<TError \| null>`      | Error from the last failed mutation.                                           |
+| `variables`   | `ShallowRef<TVars \| undefined>`  | Variables passed to the most recent call.                                      |
+| `isLoading`   | `ComputedRef<boolean>`            | `true` when `asyncStatus === 'loading'`.                                       |
+| `reset`       | `() => void`                      | Resets `state` back to the initial pending state.                              |
+
+<Tip>
+Use `mutate()` in templates and event handlers — it never throws an unhandled rejection. Use `mutateAsync()` when you need to `await` the result or handle errors with `try/catch`.
+</Tip>
+
+## Passing variables
+
+Variables passed to `mutate()` or `mutateAsync()` are forwarded to the `mutation` function and become available in all lifecycle hooks via the `vars` argument. They are also exposed on the `variables` ref:
+
+```vue
+<script setup lang="ts">
+import { useMutation } from '@pinia/colada'
+
+const { variables, mutate } = useMutation({
+  mutation: (todoText: string) =>
+    fetch('/api/todos', {
+      method: 'POST',
+      body: JSON.stringify({ text: todoText }),
+    }),
+})
+</script>
+```
+
+Defining typed parameters also makes TypeScript infer the `variables` type automatically.
+
+## Lifecycle hooks
+
+Mutations have four lifecycle hooks: `onMutate`, `onSuccess`, `onError`, and `onSettled`. They run in order around the `mutation` call.
+
+```ts
+import { useMutation, useQueryCache } from '@pinia/colada'
+
+const queryCache = useQueryCache()
+
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+
+  // Runs before mutation. Return value becomes `context`.
+  onMutate(text) {
+    const previousTodos = queryCache.getQueryData(['todos'])
+    queryCache.setQueryData(['todos'], [...(previousTodos || []), { text }])
+    return { previousTodos }
+  },
+
+  // Runs on success. Receives result, variables, and context.
+  onSuccess(data, vars, context) {
+    console.log('Created todo:', data)
+  },
+
+  // Runs on error. Receives error, variables, and context.
+  onError(error, vars, context) {
+    // Roll back optimistic update
+    queryCache.setQueryData(['todos'], context.previousTodos)
+  },
+
+  // Runs after success or error.
+  onSettled(data, error, vars, context) {
+    queryCache.invalidateQueries({ key: ['todos'] })
+  },
+})
+```
+
+<AccordionGroup>
+  <Accordion title="onMutate">
+
+Runs before `mutation`. If it returns a promise, the mutation waits for it to resolve.
+
+The return value becomes the `context` argument in `onSuccess`, `onError`, and `onSettled`. This is useful for capturing a snapshot before an optimistic update.
+
+**Place `onMutate` before `mutation` in the options object** so TypeScript can infer the `context` type inside `mutation` and the other hooks.
+
+  </Accordion>
+  <Accordion title="onSuccess">
+
+Runs when the `mutation` promise resolves. Receives `(data, vars, context)`.
+
+  </Accordion>
+  <Accordion title="onError">
+
+Runs when the `mutation` promise rejects. Receives `(error, vars, context)`.
+
+If `onMutate` threw, context properties may be `undefined` (typed as `Partial`).
+
+  </Accordion>
+  <Accordion title="onSettled">
+
+Runs after the mutation completes — whether it succeeded or failed. Receives `(data, error, vars, context)`.
+
+Returning a promise from `onSettled` delays the mutation's resolution. This is useful when you want `asyncStatus` to stay `'loading'` until related queries have been refetched.
+
+  </Accordion>
+</AccordionGroup>
+
+## Invalidating queries after a mutation
+
+After a write operation, use `useQueryCache()` to invalidate the affected queries so they refetch with fresh data.
+
+```vue
+<script lang="ts" setup>
+import { useMutation, useQueryCache } from '@pinia/colada'
+import { createTodo } from './api/todos'
+
+const queryCache = useQueryCache()
+
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+  onSettled: () => {
+    queryCache.invalidateQueries({ key: ['todos'], exact: true })
+  },
+})
+</script>
+```
+
+To keep `asyncStatus` in `'loading'` until the invalidated queries have finished refetching, `await` the `invalidateQueries` call:
+
+```ts
+const { mutate } = useMutation({
+  mutation: (text: string) => createTodo(text),
+  onSettled: async () =>
+    await queryCache.invalidateQueries({ key: ['todos'], exact: true }),
+})
+```
+
+See [Query Invalidation](/guide/query-invalidation) for the full invalidation API.
+
+## Complete CRUD example
+
+The following example covers create, update, and delete mutations for a todo list, each invalidating the shared `['todos']` query on completion.
+
+<CodeGroup>
+
+```ts mutations/todos.ts
+import { useMutation, useQueryCache } from '@pinia/colada'
+
+interface Todo {
+  id: number
+  text: string
+  done: boolean
+}
+
+export function useCreateTodo() {
+  const queryCache = useQueryCache()
+  return useMutation({
+    mutation: (text: string) =>
+      fetch('/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      }).then((r) => r.json() as Promise<Todo>),
+    onSettled: () => queryCache.invalidateQueries({ key: ['todos'] }),
+  })
+}
+
+export function useUpdateTodo() {
+  const queryCache = useQueryCache()
+  return useMutation({
+    mutation: ({ id, text, done }: Partial<Todo> & { id: number }) =>
+      fetch(`/api/todos/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ text, done }),
+      }).then((r) => r.json() as Promise<Todo>),
+    onSettled: () => queryCache.invalidateQueries({ key: ['todos'] }),
+  })
+}
+
+export function useDeleteTodo() {
+  const queryCache = useQueryCache()
+  return useMutation({
+    mutation: (id: number) =>
+      fetch(`/api/todos/${id}`, { method: 'DELETE' }),
+    onSettled: () => queryCache.invalidateQueries({ key: ['todos'] }),
+  })
+}
+```
+
+```vue components/TodoList.vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+import { useCreateTodo, useUpdateTodo, useDeleteTodo } from '@/mutations/todos'
+
+const { data: todos } = useQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos').then((r) => r.json()),
+})
+
+const { mutate: createTodo, asyncStatus: creating } = useCreateTodo()
+const { mutate: updateTodo } = useUpdateTodo()
+const { mutate: deleteTodo } = useDeleteTodo()
+</script>
+
+<template>
+  <ul>
+    <li v-for="todo in todos" :key="todo.id">
+      <input
+        type="checkbox"
+        :checked="todo.done"
+        @change="updateTodo({ id: todo.id, done: !todo.done })"
+      />
+      {{ todo.text }}
+      <button @click="deleteTodo(todo.id)">Delete</button>
+    </li>
+  </ul>
+  <button :disabled="creating === 'loading'" @click="createTodo('New todo')">
+    Add
+  </button>
+</template>
+```
+
+</CodeGroup>
+
+## Reusable mutations with `defineMutation()`
+
+Use `defineMutation()` to share mutation state and extra logic across components — similar to how `defineQuery()` works for queries.
+
+<CodeGroup>
+
+```ts mutations/todos.ts
+import { ref } from 'vue'
+import { defineMutation, useMutation } from '@pinia/colada'
+
+export const useCreateTodo = defineMutation(() => {
+  const todoText = ref('')
+  const { mutate, ...mutation } = useMutation({
+    mutation: (text: string) =>
+      fetch('/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      }),
+  })
+
+  return {
+    ...mutation,
+    createTodo: () => mutate(todoText.value),
+    todoText,
+  }
+})
+```
+
+```vue components/CreateTodo.vue
+<script setup lang="ts">
+import { useCreateTodo } from '@/mutations/todos'
+
+const { createTodo, asyncStatus, todoText } = useCreateTodo()
+</script>
+
+<template>
+  <form @submit.prevent="createTodo()">
+    <input v-model="todoText" />
+    <button :disabled="asyncStatus === 'loading'">Add todo</button>
+  </form>
+</template>
+```
+
+</CodeGroup>
+
+The `todoText` ref is created once and shared across all components that call `useCreateTodo()`.

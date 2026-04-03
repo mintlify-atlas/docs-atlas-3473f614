@@ -1,0 +1,137 @@
+---
+title: Plugins
+description: Extend Pinia Colada globally with retries, refetch policies, persistence, and more — without changing every useQuery() or useMutation() call.
+---
+
+Plugins let you extend Pinia Colada globally without changing individual `useQuery()` or `useMutation()` calls. Common use cases include automatic retries, refetch scheduling, cache persistence, logging, and analytics.
+
+## How plugins work
+
+A plugin is a function registered when you install Pinia Colada:
+
+```ts main.ts
+import { createApp } from 'vue'
+import { PiniaColada } from '@pinia/colada'
+import App from './App.vue'
+
+const app = createApp(App)
+
+app.use(PiniaColada, {
+  plugins: [
+    // plugin factories go here
+  ],
+})
+
+app.mount('#app')
+```
+
+Plugin order matters. If multiple plugins hook the same cache action, they run in the order they appear in the `plugins` array.
+
+## Installing a plugin
+
+Most plugins follow the same three-step workflow:
+
+<Steps>
+  <Step title="Install the package">
+    Install the plugin package from npm (built-in plugins skip this step):
+
+    ```bash
+    npm install @pinia/colada-plugin-retry
+    ```
+  </Step>
+  <Step title="Import and register the plugin">
+    Import the plugin factory and add it to the `plugins` array:
+
+    ```ts main.ts
+    import { PiniaColada } from '@pinia/colada'
+    import { PiniaColadaRetry } from '@pinia/colada-plugin-retry'
+
+    app.use(PiniaColada, {
+      plugins: [
+        PiniaColadaRetry({ retry: 3 }),
+      ],
+    })
+    ```
+  </Step>
+  <Step title="Configure per query (optional)">
+    Most plugins also accept per-query options that override the global defaults:
+
+    ```ts
+    useQuery({
+      key: ['todos'],
+      query: fetchTodos,
+      retry: 0, // disable retries for this specific query
+    })
+    ```
+  </Step>
+</Steps>
+
+## Official plugins
+
+<CardGroup cols={2}>
+  <Card title="Auto Refetch" icon="rotate" href="/plugins/official/auto-refetch">
+    Automatically refetch queries on a schedule using `staleTime` or a fixed interval.
+  </Card>
+  <Card title="Retry" icon="arrows-rotate" href="/plugins/official/retry">
+    Retry failed query fetches with configurable attempts, delays, and conditions.
+  </Card>
+  <Card title="Delay" icon="clock" href="/plugins/official/delay">
+    Delay the `asyncStatus` transition to `'loading'` to prevent flash-of-loading.
+  </Card>
+  <Card title="Cache Persister" icon="database" href="/plugins/official/cache-persister">
+    Persist the query cache to `localStorage`, `sessionStorage`, or a custom adapter.
+  </Card>
+</CardGroup>
+
+### Query Hooks (built-in)
+
+`PiniaColadaQueryHooksPlugin` is included in `@pinia/colada` and provides global `onSuccess`, `onError`, and `onSettled` callbacks for all queries. It's useful for centralizing side effects like toast notifications, logging, and analytics.
+
+```ts main.ts
+import { PiniaColada, PiniaColadaQueryHooksPlugin } from '@pinia/colada'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaQueryHooksPlugin({
+      onError(error, entry) {
+        console.error('Query failed', entry.key, error)
+      },
+    }),
+  ],
+})
+```
+
+## Community plugins
+
+The community has built additional plugins for common use cases. Browse them on npm using the [`pinia-colada-plugin` keyword](https://www.npmjs.com/search?q=keywords:pinia-colada-plugin).
+
+### Recently Successful
+
+Adds a `recentlySuccessful` ref to `useMutation()` results. It becomes `true` on success and automatically resets after a configurable duration.
+
+- **Extends**: mutations
+- **Package**: `pinia-colada-plugin-recently-successful`
+- **Repository**: https://github.com/Barbapapazes/pinia-colada-plugin-recently-successful
+
+```ts
+import { PiniaColadaRecentlySuccessfulPlugin } from 'pinia-colada-plugin-recently-successful'
+
+app.use(PiniaColada, {
+  plugins: [PiniaColadaRecentlySuccessfulPlugin()],
+})
+```
+
+```vue
+<script setup lang="ts">
+const { mutate, recentlySuccessful } = useMutation({ mutation: saveTodo })
+</script>
+```
+
+<Note>
+  Want your plugin listed here? Open a pull request and include a short description, repository link, and npm link.
+  Give it the `pinia-colada-plugin-` name prefix and add the `pinia-colada-plugin` keyword to your `package.json` for discoverability.
+</Note>
+
+## Writing your own plugin
+
+If you want to create a custom plugin or understand how existing ones work, see [Writing plugins](/plugins/writing-plugins).

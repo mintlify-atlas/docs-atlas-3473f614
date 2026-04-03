@@ -1,0 +1,228 @@
+---
+title: "Testing"
+description: "Test components that use useQuery and useMutation by mocking at the network layer with MSW and a real Pinia instance."
+---
+
+When testing components that use Pinia Colada, focus on **testing your app's behavior**, not Pinia Colada internals. In most cases, mock at the network layer so queries and mutations run through the real Pinia Colada flow.
+
+## Avoid `createTestingPinia`
+
+<Warning>
+  Do **not** use `createTestingPinia()` from `@pinia/testing`. It stubs Pinia actions, which breaks Pinia Colada's internal stores. Always use a plain `createPinia()` in your tests.
+</Warning>
+
+## Setup
+
+<Steps>
+  <Step title="Install test dependencies">
+    ```bash
+    npm i -D msw vitest @vue/test-utils
+    ```
+  </Step>
+  <Step title="Set up MSW">
+    MSW intercepts HTTP requests at the network layer. Follow the official guides to configure it for your test runner:
+
+    - [MSW getting started](https://mswjs.io/docs/getting-started)
+    - [MSW Node integration](https://mswjs.io/docs/integrations/node)
+  </Step>
+  <Step title="Create a mount helper">
+    Mount components with both `createPinia()` and `PiniaColada`:
+
+    ```ts
+    import { describe, it, expect } from 'vitest'
+    import { mount, flushPromises } from '@vue/test-utils'
+    import { createPinia } from 'pinia'
+    import { PiniaColada } from '@pinia/colada'
+
+    function mountWithPlugins(component, options = {}) {
+      return mount(component, {
+        global: {
+          plugins: [createPinia(), PiniaColada],
+        },
+        ...options,
+      })
+    }
+    ```
+
+    <Tip>
+      Use `happy-dom` or `jsdom` as your [Vitest environment](https://vitest.dev/config/#environment) since components need a DOM.
+    </Tip>
+  </Step>
+</Steps>
+
+## Testing queries
+
+Given this component:
+
+```vue
+<!-- ContactList.vue -->
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+const { data, error, status } = useQuery({
+  key: ['contacts'],
+  query: async () => {
+    const res = await fetch('/api/contacts')
+    if (!res.ok) {
+      throw new Error(`Request failed: ${res.status}`)
+    }
+    return res.json()
+  },
+})
+</script>
+
+<template>
+  <div v-if="status === 'pending'">Loading...</div>
+  <div v-else-if="status === 'error'">Error: {{ error?.message }}</div>
+  <ul v-else-if="data">
+    <li v-for="contact in data" :key="contact.id">{{ contact.name }}</li>
+  </ul>
+</template>
+```
+
+Intercept the request with MSW and assert on what the component renders:
+
+### Loading and success states
+
+```ts
+import { http, HttpResponse } from 'msw'
+import { server } from './mocks/server'
+import ContactList from './ContactList.vue'
+
+it('renders contacts', async () => {
+  server.use(
+    http.get('/api/contacts', () =>
+      HttpResponse.json([
+        { id: 1, name: 'Alice' },
+        { id: 2, name: 'Bob' },
+      ]),
+    ),
+  )
+
+  const wrapper = mountWithPlugins(ContactList)
+  expect(wrapper.text()).toContain('Loading...')
+
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('Alice')
+  expect(wrapper.text()).toContain('Bob')
+})
+```
+
+### Error states
+
+Return a non-2xx response from MSW to exercise the error branch:
+
+```ts
+it('handles errors', async () => {
+  server.use(
+    http.get('/api/contacts', () =>
+      HttpResponse.json({ message: 'Server Error' }, { status: 500 }),
+    ),
+  )
+
+  const wrapper = mountWithPlugins(ContactList)
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('Request failed: 500')
+})
+```
+
+## Testing mutations
+
+Given this component:
+
+```vue
+<!-- CreateContact.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useMutation } from '@pinia/colada'
+
+const name = ref('')
+const { mutate, status, asyncStatus } = useMutation({
+  mutation: async (newName: string) => {
+    const res = await fetch('/api/contacts', {
+      method: 'POST',
+      body: JSON.stringify({ name: newName }),
+    })
+    if (!res.ok) {
+      throw new Error(`Request failed: ${res.status}`)
+    }
+    return res.json()
+  },
+})
+</script>
+
+<template>
+  <form @submit.prevent="mutate(name)">
+    <input v-model="name" />
+    <button type="submit" :disabled="asyncStatus === 'loading'">Create</button>
+  </form>
+  <p v-if="asyncStatus === 'loading'">Saving...</p>
+  <p v-if="status === 'success'">Contact created!</p>
+</template>
+```
+
+Test it with a POST handler:
+
+```ts
+import { http, HttpResponse } from 'msw'
+import { server } from './mocks/server'
+import CreateContact from './CreateContact.vue'
+
+it('creates a contact', async () => {
+  server.use(
+    http.post('/api/contacts', () =>
+      HttpResponse.json({ id: 3, name: 'Charlie' }),
+    ),
+  )
+
+  const wrapper = mountWithPlugins(CreateContact)
+
+  await wrapper.find('input').setValue('Charlie')
+  await wrapper.find('form').trigger('submit')
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('Contact created!')
+})
+```
+
+## Tips
+
+<AccordionGroup>
+  <Accordion title="flushPromises()">
+    Use `flushPromises()` from `@vue/test-utils` after any action that triggers async updates — initial query runs, submit handlers, and refetches all need it before you can assert on the rendered output.
+  </Accordion>
+  <Accordion title="Inspecting cache state">
+    Use `useQueryCache()` inside tests to inspect or seed cache state. Because you're using a real `createPinia()`, the cache works exactly as it does in production.
+  </Accordion>
+  <Accordion title="Mocking the query function directly (without MSW)">
+    For narrow unit tests where you don't need the full request pipeline, pass a mocked query function directly:
+
+    ```ts
+    import { vi } from 'vitest'
+    import { useQuery } from '@pinia/colada'
+
+    const query = vi.fn().mockResolvedValue([{ id: 1, name: 'Alice' }])
+
+    const TestComponent = {
+      setup() {
+        const { data } = useQuery({
+          key: ['contacts'],
+          query,
+        })
+        return { data }
+      },
+      template: `<pre>{{ data }}</pre>`,
+    }
+
+    const wrapper = mountWithPlugins(TestComponent)
+
+    await flushPromises()
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('Alice')
+    ```
+
+    MSW is still preferred since it tests the full request pipeline, but direct mocking is useful for isolating component logic.
+  </Accordion>
+</AccordionGroup>

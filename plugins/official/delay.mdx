@@ -1,0 +1,135 @@
+---
+title: Delay
+description: Prevent flash-of-loading by delaying the asyncStatus transition to 'loading' for queries and mutations.
+---
+
+`@pinia/colada-plugin-delay` delays the transition of `asyncStatus` to `'loading'`. If a query or mutation completes before the delay expires, `asyncStatus` stays `'idle'` the whole time — no loading state ever appears.
+
+This is particularly useful when you already have cached data and are refetching in the background. Rather than briefly flashing a loading spinner for a fast network response, the UI stays stable.
+
+## Installation
+
+```bash
+npm install @pinia/colada-plugin-delay
+```
+
+## Setup
+
+Import `PiniaColadaDelay` and add it to the `plugins` array:
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaDelay } from '@pinia/colada-plugin-delay'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaDelay({
+      delay: 200, // wait 200ms before showing loading state
+    }),
+  ],
+})
+```
+
+## How it works
+
+Without the plugin, `asyncStatus` switches to `'loading'` the moment a fetch or mutation starts. With the plugin, `asyncStatus` stays `'idle'` until the delay expires. If the request finishes before the delay, the loading state is never shown.
+
+```
+Without delay:   idle → loading → idle
+With delay:      idle → (timer) → [only loading if still pending] → idle
+```
+
+## Configuration
+
+<AccordionGroup>
+  <Accordion title="delay: number (default: 200)">
+    Milliseconds to wait before letting `asyncStatus` become `'loading'`. Applies to both queries and mutations.
+
+    ```ts
+    PiniaColadaDelay({ delay: 300 })
+    ```
+  </Accordion>
+  <Accordion title="delay: false or 0">
+    Disables the delay behavior entirely.
+
+    ```ts
+    PiniaColadaDelay({ delay: false })
+    ```
+  </Accordion>
+  <Accordion title="query.delay and mutations.delay">
+    Override the top-level `delay` separately for queries and mutations.
+
+    ```ts
+    PiniaColadaDelay({
+      delay: 200,       // default for both
+      query: { delay: 300 },     // queries wait 300ms
+      mutations: { delay: 0 },   // mutations show loading immediately
+    })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+You can also override the delay per query:
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+  delay: 0, // disable delay for this query
+})
+```
+
+## Delay state extension
+
+When this plugin is installed, `useQuery()` and `useMutation()` return an additional `isDelaying` ref:
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `isDelaying` | `ShallowRef<boolean>` | `true` while the plugin is holding back the `'loading'` transition |
+
+Use `isDelaying` when you need to distinguish "the timer is running" from "we're actually loading":
+
+```vue
+<script setup lang="ts">
+const { data, asyncStatus, isDelaying } = useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+})
+</script>
+
+<template>
+  <!-- Only show spinner after the delay has expired -->
+  <Spinner v-if="asyncStatus === 'loading'" />
+  <ul>
+    <li v-for="todo in data" :key="todo.id">{{ todo.title }}</li>
+  </ul>
+</template>
+```
+
+## Combining with placeholder data
+
+Pairing `placeholderData` with `PiniaColadaDelay` gives you the best of both worlds: stale content is shown while refetching, and the loading spinner only appears if the refresh takes longer than expected.
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+  placeholderData: (previousData) => previousData,
+  delay: 200,
+})
+```
+
+## Using query-only or mutation-only variants
+
+If you only want to delay one type, you can import the targeted helpers directly:
+
+```ts main.ts
+import { PiniaColadaDelayQuery, PiniaColadaDelayMutations } from '@pinia/colada-plugin-delay'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaDelayQuery({ delay: 200 }),
+    // PiniaColadaDelayMutations({ delay: 200 }),
+  ],
+})
+```

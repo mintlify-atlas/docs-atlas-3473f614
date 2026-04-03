@@ -1,0 +1,187 @@
+---
+title: 'defineMutation()'
+description: 'Create a reusable mutation composable with shared state across all components that call it.'
+---
+
+`defineMutation()` creates a composable that wraps `useMutation()` and shares its state across every component or scope that calls it. Like `defineQuery()`, all callers receive the same reactive `data`, `status`, and `error`.
+
+## Signature
+
+```ts
+// Options form — accepts mutation options directly
+function defineMutation<
+  TData,
+  TVars = void,
+  TError = ErrorDefault,
+  TContext extends Record<any, any> = {},
+>(
+  options: UseMutationOptions<TData, TVars, TError, TContext>
+): () => UseMutationReturn<TData, TVars, TError, TContext>
+
+// Setup function form — accepts a function returning arbitrary values
+function defineMutation<T>(setup: () => T): () => T
+```
+
+<ParamField body="options" type="UseMutationOptions<TData, TVars, TError, TContext>">
+  Mutation options (same shape as what you pass to `useMutation()`). Use this
+  form when the mutation does not need additional local state.
+</ParamField>
+
+<ParamField body="setup" type="() => T">
+  A setup function, similar to a Pinia store setup. Use this form when you need
+  to expose additional refs, rename return values, or compose multiple composables.
+</ParamField>
+
+## Return value
+
+<ResponseField name="composable" type="() => UseMutationReturn<TData, TVars, TError, TContext> | T">
+  A function that, when called inside a component's `setup()`, returns the
+  mutation's reactive state. All callers share the same underlying entry in the
+  mutation cache.
+</ResponseField>
+
+## Examples
+
+### Options form
+
+Define a mutation for creating a todo:
+
+```ts
+import { defineMutation } from '@pinia/colada'
+
+export const useCreateTodo = defineMutation({
+  mutation: (text: string) =>
+    fetch('/api/todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }).then((r) => r.json()),
+})
+```
+
+Use it in a component:
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useCreateTodo } from './mutations'
+
+const { mutate, status, data } = useCreateTodo()
+const todoText = ref('')
+
+function submit() {
+  mutate(todoText.value)
+}
+</script>
+
+<template>
+  <form @submit.prevent="submit">
+    <input v-model="todoText" placeholder="New todo" />
+    <button type="submit" :disabled="status === 'loading'">Add</button>
+  </form>
+</template>
+```
+
+### Setup function form
+
+Use a setup function to bind local state to the mutation:
+
+```ts
+import { ref } from 'vue'
+import { defineMutation, useMutation } from '@pinia/colada'
+
+export const useCreateTodo = defineMutation(() => {
+  const todoText = ref('')
+
+  const { mutate, data, ...rest } = useMutation({
+    mutation: () =>
+      fetch('/api/todos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: todoText.value }),
+      }).then((r) => r.json()),
+  })
+
+  return {
+    ...rest,
+    todoText,
+    createTodo: mutate,
+    createdTodo: data,
+  }
+})
+```
+
+```vue
+<script setup lang="ts">
+import { useCreateTodo } from './mutations'
+
+const { todoText, createTodo, createdTodo, status } = useCreateTodo()
+</script>
+
+<template>
+  <form @submit.prevent="createTodo()">
+    <input v-model="todoText" placeholder="New todo" />
+    <button type="submit" :disabled="status === 'loading'">Add</button>
+  </form>
+  <p v-if="createdTodo">Created: {{ createdTodo.text }}</p>
+</template>
+```
+
+### With `onMutate` and `onSuccess`
+
+```ts
+import { defineMutation, useQueryCache } from '@pinia/colada'
+
+export const useDeleteTodo = defineMutation({
+  mutation: (id: number) =>
+    fetch(`/api/todos/${id}`, { method: 'DELETE' }).then((r) => r.json()),
+
+  onSuccess() {
+    const queryCache = useQueryCache()
+    // invalidate the todos list after a successful delete
+    queryCache.invalidateQueries({ key: ['todos'] })
+  },
+})
+```
+
+## `UseMutationOptions`
+
+`defineMutation()` accepts the same `UseMutationOptions` as `useMutation()`.
+See the [mutation options reference](/api/pinia-colada#usemutationoptionsglobal)
+for the global fields. Per-mutation fields include:
+
+<ParamField body="mutation" type="(vars: TVars, context) => Promise<TData>" required>
+  The async function that performs the mutation. Receives the variables passed
+  to `mutate()` and the context returned by `onMutate`.
+</ParamField>
+
+<ParamField body="key" type="MutationKey">
+  Optional key to identify the mutation globally. Required if you want to look
+  up the mutation from the cache or deduplicate calls.
+</ParamField>
+
+<ParamField body="meta" type="MutationMeta">
+  Arbitrary metadata stored on the mutation entry. Plugins can read this.
+</ParamField>
+
+<ParamField body="onMutate" type="(vars, context) => Awaitable<TContext | void | null>">
+  Runs before the mutation. The returned object is merged into the `context`
+  passed to `mutation`, `onSuccess`, `onError`, and `onSettled`. **Must appear
+  before `mutation` in the options object for TypeScript to infer `TContext`.**
+</ParamField>
+
+<ParamField body="onSuccess" type="(data, vars, context) => unknown">
+  Runs when the mutation succeeds.
+</ParamField>
+
+<ParamField body="onError" type="(error, vars, context) => unknown">
+  Runs when the mutation throws an error.
+</ParamField>
+
+<ParamField body="onSettled" type="(data, error, vars, context) => unknown">
+  Runs after the mutation settles, regardless of the outcome.
+</ParamField>
+
+<ParamField body="gcTime" type="number | false" default="60000">
+  Time in milliseconds before an unused mutation entry is garbage-collected.
+</ParamField>

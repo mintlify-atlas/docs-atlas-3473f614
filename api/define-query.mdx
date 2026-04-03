@@ -1,0 +1,167 @@
+---
+title: 'defineQuery()'
+description: 'Create a reusable query composable with shared state across all components that call it.'
+---
+
+`defineQuery()` creates a composable that wraps `useQuery()` and shares its state across every component or scope that calls it. Unlike calling `useQuery()` directly inside each component, `defineQuery()` ensures that all callers reference the same underlying cache entry and reactive state.
+
+## Signature
+
+```ts
+// Options form — accepts static query options
+function defineQuery<TData, TError = ErrorDefault>(
+  options: DefineQueryOptions<TData, TError>
+): () => UseQueryReturn<TData, TError>
+
+// Setup function form — accepts a function returning arbitrary values
+function defineQuery<T>(setup: () => T): () => T
+```
+
+<ParamField body="options" type="DefineQueryOptions<TData, TError>">
+  Static query options (same shape as `UseQueryOptions` but without reactive
+  values for `initialData` and `placeholderData`). Use this form when the query
+  does not depend on any dynamic reactive values.
+</ParamField>
+
+<ParamField body="setup" type="() => T">
+  A synchronous setup function, similar to a Pinia store setup function. Use
+  this form when you need to expose additional refs, rename return values, or
+  compose multiple queries. **Must be synchronous.**
+</ParamField>
+
+## Return value
+
+Both forms return a composable — a plain function you call inside `setup()`.
+
+<ResponseField name="composable" type="() => UseQueryReturn<TData, TError> | T">
+  A function that, when called inside a component's `setup()` or another
+  composable, returns the query's reactive state. All callers share the same
+  underlying state.
+</ResponseField>
+
+## How it differs from `useQuery()`
+
+| | `useQuery()` | `defineQuery()` |
+|---|---|---|
+| State sharing | Per component | Shared across all callers |
+| Reactive options | Supported | Static only (options form) |
+| Code reuse | Requires wrapper composable | Built-in |
+| `refetchOnMount` | Runs every mount | Respects the option |
+
+<Tip>
+  Use `defineQuery()` when multiple components display the same data and you
+  want a single fetch rather than one per component.
+</Tip>
+
+## Examples
+
+### Options form
+
+```ts
+import { defineQuery } from '@pinia/colada'
+
+const useTodoList = defineQuery({
+  key: ['todos'],
+  query: () => fetch('/api/todos').then((r) => r.json()),
+  staleTime: 30_000,
+})
+```
+
+Use it in any component:
+
+```vue
+<script setup lang="ts">
+import { useTodoList } from './queries'
+
+const { data, status, refresh } = useTodoList()
+</script>
+
+<template>
+  <ul>
+    <li v-for="todo in data" :key="todo.id">{{ todo.text }}</li>
+  </ul>
+</template>
+```
+
+Any other component calling `useTodoList()` receives the same reactive `data`,
+`status`, and `error` — no duplicate fetches.
+
+### Setup function form
+
+Use a setup function when you need to expose additional state or rename return values:
+
+```ts
+import { ref } from 'vue'
+import { defineQuery, useQuery } from '@pinia/colada'
+
+const useFilteredTodos = defineQuery(() => {
+  const filter = ref<'all' | 'active' | 'done'>('all')
+
+  const { data, ...rest } = useQuery({
+    key: () => ['todos', { filter: filter.value }],
+    query: () =>
+      fetch(`/api/todos?filter=${filter.value}`).then((r) => r.json()),
+  })
+
+  // rename data and expose the filter ref
+  return { ...rest, todoList: data, filter }
+})
+```
+
+```vue
+<script setup lang="ts">
+import { useFilteredTodos } from './queries'
+
+const { todoList, filter, status } = useFilteredTodos()
+</script>
+
+<template>
+  <select v-model="filter">
+    <option value="all">All</option>
+    <option value="active">Active</option>
+    <option value="done">Done</option>
+  </select>
+  <ul>
+    <li v-for="todo in todoList" :key="todo.id">{{ todo.text }}</li>
+  </ul>
+</template>
+```
+
+### Shared state between components
+
+Because `defineQuery()` shares state, the second component does not trigger a
+new network request:
+
+```vue
+<!-- ComponentA.vue -->
+<script setup lang="ts">
+import { useTodoList } from './queries'
+const { data } = useTodoList() // fetches from network
+</script>
+
+<!-- ComponentB.vue -->
+<script setup lang="ts">
+import { useTodoList } from './queries'
+const { data } = useTodoList() // reuses the same cache entry
+</script>
+```
+
+## `DefineQueryOptions`
+
+`DefineQueryOptions` is a variant of `UseQueryOptions` that only allows static
+values — no `MaybeRefOrGetter` wrappers for `initialData` and `placeholderData`.
+This is enforced because `defineQuery()` runs outside of a component effect scope.
+
+```ts
+type DefineQueryOptions<
+  TData = unknown,
+  TError = ErrorDefault,
+  TDataInitial extends TData | undefined = undefined,
+> = _RemoveMaybeRef<
+  UseQueryOptions<TData, TError, TDataInitial>,
+  typeof tErrorSymbol | 'initialData' | 'placeholderData'
+>
+```
+
+For dynamic values based on reactive data, use the **setup function form** and
+call `useQuery()` inside it.

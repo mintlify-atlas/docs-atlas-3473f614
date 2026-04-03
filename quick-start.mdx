@@ -1,0 +1,282 @@
+---
+title: Quick start
+description: Get from zero to working data fetching in your Vue application in under 5 minutes.
+---
+
+Pinia Colada is the perfect companion to [Pinia](https://pinia.vuejs.org) for async state management. It removes the need for boilerplate data fetching code and transparently brings caching, deduplication, invalidation, and stale-while-revalidate to your Vue components.
+
+<Steps>
+  <Step title="Install the package">
+    Install `@pinia/colada` alongside Pinia:
+
+    <CodeGroup>
+
+    ```bash npm
+    npm i @pinia/colada
+    ```
+
+    ```bash pnpm
+    pnpm add @pinia/colada
+    ```
+
+    ```bash yarn
+    yarn add @pinia/colada
+    ```
+
+    </CodeGroup>
+
+    <Note>
+      Pinia Colada requires Vue 3.5+ and Pinia as a peer dependency. If you don't have Pinia installed, add it with `npm i pinia`.
+    </Note>
+  </Step>
+
+  <Step title="Install the plugin">
+    Register the `PiniaColada` plugin in your application entry point. Install it **after** Pinia so it can pick up the Pinia instance automatically:
+
+    ```ts
+    import { createApp } from 'vue'
+    import { createPinia } from 'pinia'
+    import { PiniaColada } from '@pinia/colada'
+
+    const app = createApp({})
+    app.use(createPinia())
+    app.use(PiniaColada, {
+      queryOptions: {
+        // change the stale time for all queries to 0ms
+        staleTime: 0,
+      },
+      mutationOptions: {
+        // add global mutation options here
+      },
+      plugins: [
+        // add Pinia Colada plugins here
+      ],
+    })
+
+    app.mount('#app')
+    ```
+
+    The options object is entirely optional — Pinia Colada works out of the box with sensible defaults.
+  </Step>
+
+  <Step title="Your first query">
+    Use `useQuery()` in any component to declaratively fetch data. Provide a `key` to identify the entry in the cache and a `query` function that returns the data:
+
+    ```vue
+    <script setup lang="ts">
+    import { useQuery } from '@pinia/colada'
+    import { getAllProducts } from '@/api/products'
+    import ProductItem from '@/components/ProductItem.vue'
+
+    const {
+      state: productList,
+      asyncStatus,
+      refresh,
+    } = useQuery({
+      key: ['products-list'],
+      query: getAllProducts,
+    })
+    </script>
+    ```
+
+    `useQuery()` returns reactive state you can use directly in your template:
+
+    - `state` — contains `data`, `error`, and `status` for the query.
+    - `asyncStatus` — `'idle'` or `'loading'`, indicates whether a fetch is in-flight.
+    - `refresh()` — triggers a refetch if the cache is stale.
+    - `refetch()` — forces a refetch regardless of staleness.
+
+    Here's a complete page component with a list view and a detail view side by side:
+
+    <CodeGroup>
+
+    ```vue pages/products.vue
+    <script setup lang="ts">
+    import { useQuery } from '@pinia/colada'
+    import { getAllProducts } from '@/api/products'
+    import ProductItem from '@/components/ProductItem.vue'
+
+    const {
+      state: productList,
+      asyncStatus,
+    } = useQuery({
+      key: ['products-list'],
+      query: getAllProducts,
+    })
+    </script>
+
+    <template>
+      <main>
+        <LoadingIndicator v-if="asyncStatus === 'loading'" />
+
+        <div v-if="productList.error">
+          <ErrorMessage :error="productList.error" />
+        </div>
+        <div v-else-if="productList.data">
+          <div v-for="product in productList.data" :key="product.id">
+            <ProductItem :product="product" />
+          </div>
+        </div>
+      </main>
+    </template>
+    ```
+
+    ```vue pages/products/[id].vue
+    <script setup lang="ts">
+    import { useQuery } from '@pinia/colada'
+    import { useRoute } from 'vue-router'
+    import { getProductById } from '@/api/products'
+    import ProductItemDetail from '@/components/ProductItemDetail.vue'
+
+    const route = useRoute()
+
+    const { state: product, asyncStatus } = useQuery({
+      // key can be made dynamic by providing a function
+      key: () => ['products', route.params.id as string],
+      query: () => getProductById(route.params.id as string),
+    })
+    </script>
+
+    <template>
+      <main>
+        <LoadingIndicator v-if="asyncStatus === 'loading'" />
+
+        <div v-if="product.error">
+          <ErrorMessage :error="product.error" />
+        </div>
+        <div v-else class="flex flex-wrap">
+          <ProductItemDetail :product="product.data" />
+        </div>
+      </main>
+    </template>
+    ```
+
+    </CodeGroup>
+
+    <Tip>
+      When the `key` is a function, Pinia Colada tracks its reactive dependencies. When `route.params.id` changes, the query automatically refetches with the new key.
+    </Tip>
+  </Step>
+
+  <Step title="Your first mutation">
+    Use `useMutation()` to modify server data and keep related queries in sync. Unlike queries, mutations only run when you call `mutate()` explicitly:
+
+    ```vue
+    <script setup lang="ts">
+    import { useMutation, useQueryCache } from '@pinia/colada'
+    import { patchContact } from '@/api/contacts'
+    import type { Contact } from '@/api/contacts'
+    import ContactDetail from '@/components/ContactDetail.vue'
+
+    const props = defineProps<{ contact: Contact }>()
+
+    // use the query cache to invalidate queries after mutation
+    const queryCache = useQueryCache()
+
+    const {
+      mutate: updateContact,
+      state,
+      asyncStatus,
+    } = useMutation({
+      mutation: (contact: Contact) => patchContact(contact),
+      onSettled(updatedContact, error, contact) {
+        // invalidate the contact list and detail queries
+        // they will be refetched automatically if they are being used
+        queryCache.invalidateQueries({ key: ['contacts-list'] })
+        queryCache.invalidateQueries({ key: ['contacts', contact.id] })
+      },
+    })
+    </script>
+
+    <template>
+      <main>
+        <LoadingIndicator v-if="asyncStatus === 'loading'" />
+
+        <div v-if="state.error">
+          <ErrorMessage :error="state.error" />
+        </div>
+        <div v-else>
+          <ContactDetail
+            :contact="props.contact"
+            :is-updating="asyncStatus === 'loading'"
+            @update="updateContact"
+          />
+        </div>
+      </main>
+    </template>
+    ```
+
+    The `onSettled()` hook fires after the mutation completes, whether it succeeded or failed. Calling `queryCache.invalidateQueries()` marks matching queries stale — Pinia Colada refetches them automatically if they are actively mounted in the UI.
+  </Step>
+
+  <Step title="Scale up with defineQueryOptions">
+    As your app grows, you'll want to reuse query definitions across multiple components. `defineQueryOptions()` lets you define a query once and use it anywhere — with full type safety throughout.
+
+    Start by defining your query options and key factories in a dedicated file:
+
+    ```ts
+    // queries/products.ts
+    import { getProductById } from '@/api/products'
+    import { defineQueryOptions } from '@pinia/colada'
+
+    export const PRODUCT_QUERY_KEYS = {
+      root: ['products'] as const,
+      byId: (id: string) => [...PRODUCT_QUERY_KEYS.root, id] as const,
+    }
+
+    export const productDetailsQuery = defineQueryOptions((id: string) => ({
+      key: PRODUCT_QUERY_KEYS.byId(id),
+      query: () => getProductById(id),
+    }))
+    ```
+
+    Then use it in any component:
+
+    ```vue
+    <script setup lang="ts">
+    import { useQuery } from '@pinia/colada'
+    import { useRoute } from 'vue-router'
+    import { productDetailsQuery } from '@/queries/products'
+
+    const route = useRoute()
+
+    const { state: product, asyncStatus } = useQuery(() =>
+      productDetailsQuery(route.params.id as string),
+    )
+    </script>
+    ```
+
+    You can also access the cache with full type safety from mutations or other queries:
+
+    ```ts
+    import { useQueryCache } from '@pinia/colada'
+    import { productDetailsQuery } from '@/queries/products'
+
+    const queryCache = useQueryCache()
+
+    // typed cache read — TypeScript knows the shape of the returned data
+    const cachedProduct = queryCache.getQueryData(productDetailsQuery('24').key)
+    ```
+
+    <Tip>
+      For one-off queries that won't be reused, inline options with `useQuery()` are fine. Reach for `defineQueryOptions()` as soon as you use the same query in multiple places or need type-safe cache access from mutations.
+    </Tip>
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Queries" icon="magnifying-glass" href="/guide/queries">
+    Learn the full query API: status, async status, `refresh`, `refetch`, and more.
+  </Card>
+  <Card title="Mutations" icon="pen-to-square" href="/guide/mutations">
+    Explore mutation lifecycle hooks and optimistic updates.
+  </Card>
+  <Card title="Query keys" icon="key" href="/guide/query-keys">
+    Understand hierarchical keys and key factories for organized invalidation.
+  </Card>
+  <Card title="Cache invalidation" icon="arrows-rotate" href="/guide/query-invalidation">
+    Control exactly when and how queries are refetched after mutations.
+  </Card>
+</CardGroup>

@@ -1,97 +1,114 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Pinia Colada"
+description: "The smart async data fetching layer for Vue. Automatic caching, deduplication, and invalidation — built on top of Pinia."
 ---
 
-## Setting up
+Pinia Colada removes the complexity of async state management in Vue applications. No more manual loading flags, error tracking, or boilerplate — just declare what data you need and let Pinia Colada handle the rest.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quick-start">
+    Get from zero to working data fetching in under 5 minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="package" href="/installation">
+    Install and configure Pinia Colada in your Vue or Nuxt project.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Queries" icon="magnifying-glass" href="/guide/queries">
+    Learn how to fetch and cache data declaratively with `useQuery`.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Mutations" icon="pen-to-square" href="/guide/mutations">
+    Modify server data and keep your UI in sync with `useMutation`.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why Pinia Colada?
 
-Everything you need to create world-class documentation.
+Instead of writing this every time you fetch data:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+```vue
+<script setup lang="ts">
+import { shallowRef, ref } from 'vue'
+import { fetchUsers } from '../api/users'
 
-## Need inspiration?
+const isLoading = ref(false)
+const isPending = ref(true)
+const error = shallowRef(null)
+const data = shallowRef()
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+async function refresh() {
+  isLoading.value = true
+  try {
+    data.value = await fetchUsers()
+    error.value = null
+    isPending.value = false
+  } catch (err) {
+    error.value = err
+  } finally {
+    isLoading.value = false
+  }
+}
+
+refresh()
+</script>
+```
+
+You write this:
+
+```vue
+<script setup lang="ts">
+import { fetchUsers } from '../api/users'
+import { useQuery } from '@pinia/colada'
+
+const { data, error, isPending, isLoading, refresh } = useQuery({
+  key: ['users'],
+  query: fetchUsers,
+})
+</script>
+```
+
+And get automatic caching, request deduplication, background refetching, and more — for free.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Automatic caching" icon="database">
+    Smart client-side caching with stale-while-revalidate and request deduplication across components.
+  </Card>
+  <Card title="Query invalidation" icon="arrows-rotate">
+    Invalidate and refetch queries automatically when mutations succeed.
+  </Card>
+  <Card title="Optimistic updates" icon="bolt">
+    Update your UI instantly before the server responds, with automatic rollback on failure.
+  </Card>
+  <Card title="Infinite queries" icon="infinity">
+    Built-in support for paginated and infinite scroll data patterns.
+  </Card>
+  <Card title="SSR support" icon="server">
+    Automatic server-side rendering via `onServerPrefetch` — no `await` required.
+  </Card>
+  <Card title="Plugin system" icon="puzzle-piece">
+    Extend Pinia Colada with official and community plugins: retry, auto-refetch, delay, and more.
+  </Card>
+  <Card title="TypeScript first" icon="code">
+    Full type safety throughout — type-safe cache access, query keys, and mutation parameters.
+  </Card>
+  <Card title="Tiny bundle" icon="feather">
+    ~2kb baseline, zero dependencies beyond Pinia and Vue, fully tree-shakeable.
+  </Card>
+</CardGroup>
+
+## Explore the docs
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/guide/queries">
+    Understand queries, mutations, query keys, and cache invalidation.
+  </Card>
+  <Card title="Advanced Patterns" icon="layer-group" href="/advanced/reusable-queries">
+    Reusable queries, the query cache, optimistic updates, and infinite scroll.
+  </Card>
+  <Card title="Official Plugins" icon="plug" href="/plugins/index">
+    Auto-refetch, retry, delay, cache persistence, and query hooks.
+  </Card>
+  <Card title="API Reference" icon="terminal" href="/api/use-query">
+    Full reference for every composable, option, and return type.
+  </Card>
+</CardGroup>

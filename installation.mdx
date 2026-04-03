@@ -1,0 +1,189 @@
+---
+title: Installation
+description: Install and configure Pinia Colada in your Vue 3 application, including plugin options, TypeScript setup, and optional Nuxt integration.
+---
+
+## Prerequisites
+
+- **Vue 3.5+** — Pinia Colada uses Vue 3.5 APIs internally.
+- **Pinia** — Pinia Colada is built on top of Pinia and requires it as a peer dependency.
+
+## Install the package
+
+Install `@pinia/colada` alongside Pinia using your package manager:
+
+<CodeGroup>
+
+```bash npm
+npm i pinia @pinia/colada
+```
+
+```bash pnpm
+pnpm add pinia @pinia/colada
+```
+
+```bash yarn
+yarn add pinia @pinia/colada
+```
+
+</CodeGroup>
+
+## Register the plugin
+
+Install the `PiniaColada` plugin in your application entry point. It must be installed **after** `createPinia()` so it can detect the Pinia instance automatically:
+
+```ts
+import { createApp } from 'vue'
+import App from './App.vue'
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+
+const app = createApp(App)
+const pinia = createPinia()
+app.use(pinia)
+app.use(PiniaColada, {
+  // Optionally provide global options here for queries
+  queryOptions: {
+    gcTime: 300_000, // 5 minutes, the default
+  },
+})
+```
+
+## Plugin options
+
+The second argument to `app.use(PiniaColada, options)` accepts a `PiniaColadaOptions` object. All fields are optional.
+
+### `queryOptions`
+
+Global defaults applied to every `useQuery()` and `defineQueryOptions()` call in your application. Individual query options override these defaults.
+
+```ts
+app.use(PiniaColada, {
+  queryOptions: {
+    staleTime: 0, // default is 5000 (5s); set to 0 to always consider data stale
+    gcTime: 300_000, // how long (ms) unused cache entries are kept in memory
+  },
+})
+```
+
+Common `queryOptions` fields:
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `staleTime` | `number` | `5000` | Time in ms before cached data is considered stale and eligible for a background refetch. |
+| `gcTime` | `number` | `300_000` | Time in ms that an unused cache entry is kept before being garbage collected. |
+
+### `mutationOptions`
+
+Global defaults applied to every `useMutation()` and `defineMutation()` call. Useful for setting global error handlers or side effects.
+
+```ts
+app.use(PiniaColada, {
+  mutationOptions: {
+    // add shared mutation lifecycle hooks here
+  },
+})
+```
+
+### `plugins`
+
+An array of Pinia Colada plugins. Plugins extend the query cache and can add cross-cutting behavior like retry logic, request delay, or automatic background refetching.
+
+```ts
+import { PiniaColada, PiniaColadaQueryHooksPlugin } from '@pinia/colada'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaQueryHooksPlugin({
+      // configure global query lifecycle hooks
+    }),
+  ],
+})
+```
+
+Official plugins are distributed as separate packages and must be installed individually. See the [plugins documentation](/plugins/index) for the full list.
+
+### `pinia` (advanced)
+
+Pass a Pinia instance explicitly. Only needed if you install `PiniaColada` before the Pinia plugin, which is not recommended for most apps.
+
+```ts
+import { createPinia } from 'pinia'
+import { PiniaColada } from '@pinia/colada'
+
+const pinia = createPinia()
+
+app.use(PiniaColada, { pinia })
+```
+
+## Install the devtools
+
+Pinia Colada ships a separate devtools package for inspecting query state during development:
+
+```bash
+npm i -D @pinia/colada-devtools
+```
+
+Add the devtools component to your root component (`App.vue`). It is automatically stripped from production builds:
+
+```vue
+<script setup lang="ts">
+import { PiniaColadaDevtools } from '@pinia/colada-devtools'
+</script>
+
+<template>
+  <main>
+    <!-- your app content -->
+  </main>
+
+  <PiniaColadaDevtools />
+</template>
+```
+
+<Note>
+  If you need devtools in production, use `<PiniaColadaProdDevtools />` instead. It is not stripped from the production bundle.
+</Note>
+
+## TypeScript setup
+
+Pinia Colada is written in TypeScript and ships its own types — no `@types` package is required. Type inference works automatically from your `query` function's return type:
+
+```ts
+import { useQuery } from '@pinia/colada'
+
+// data is inferred as User[] | undefined
+const { data } = useQuery({
+  key: ['users'],
+  query: (): Promise<User[]> => fetch('/api/users').then(r => r.json()),
+})
+```
+
+When using `defineQueryOptions()`, keys and return types flow through to `useQueryCache` methods like `getQueryData` and `setQueryData`, giving you type-safe cache access:
+
+```ts
+import { defineQueryOptions } from '@pinia/colada'
+import { getProductById } from '@/api/products'
+
+export const productDetailsQuery = defineQueryOptions((id: string) => ({
+  key: ['products', id] as const,
+  query: () => getProductById(id),
+}))
+```
+
+```ts
+import { useQueryCache } from '@pinia/colada'
+import { productDetailsQuery } from '@/queries/products'
+
+const queryCache = useQueryCache()
+
+// TypeScript knows this is Product | undefined
+const product = queryCache.getQueryData(productDetailsQuery('24').key)
+```
+
+<Tip>
+  Use `as const` on key arrays to ensure TypeScript infers a strict tuple type rather than `string[]`. This is required for fully type-safe cache operations.
+</Tip>
+
+## Nuxt
+
+Pinia Colada has a dedicated Nuxt module. See the [Nuxt integration guide](/nuxt) for installation and SSR-specific configuration.

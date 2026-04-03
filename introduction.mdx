@@ -1,0 +1,117 @@
+---
+title: Introduction
+description: Pinia Colada is the smart async data fetching layer for Vue — built on top of Pinia. Automatic caching, deduplication, and invalidation with zero boilerplate.
+---
+
+Pinia Colada takes away the complexity of async state management in Vue applications. No more manual `isLoading`, `isError`, `data`, and `error` properties. No more boilerplate. It transparently brings caching, deduplication, invalidation, and stale-while-revalidate to every component that needs data — while staying fully typed and tree-shakeable.
+
+It's built on top of [Pinia](https://pinia.vuejs.org) and follows the same principles as Pinia and Vue: approachable, flexible, powerful, and progressively adoptable. **You don't even need to learn Pinia to use Pinia Colada** — it exposes its own composables.
+
+## What it does
+
+Instead of writing this for every data fetch:
+
+```vue
+<script setup lang="ts">
+import { shallowRef, ref } from 'vue'
+import { fetchUsers } from '../api/users'
+
+const isLoading = ref(false)
+const isPending = ref(true)
+const error = shallowRef(null)
+const data = shallowRef()
+
+async function refresh() {
+  isLoading.value = true
+  try {
+    data.value = await fetchUsers()
+    error.value = null
+    isPending.value = false
+  } catch (err) {
+    error.value = err
+  } finally {
+    isLoading.value = false
+  }
+}
+
+refresh()
+</script>
+```
+
+You write this:
+
+```vue
+<script setup lang="ts">
+import { fetchUsers } from '../api/users'
+import { useQuery } from '@pinia/colada'
+
+const { data, error, isPending, isLoading, refresh } = useQuery({
+  key: ['users'],
+  query: fetchUsers,
+})
+</script>
+```
+
+Both examples give you `isLoading`, `isPending`, `error`, `data`, and `refresh`. The difference is that with Pinia Colada you also get automatic caching, request deduplication, background refetching, and cache invalidation — for free.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Automatic caching" icon="database">
+    Smart client-side caching with stale-while-revalidate and request deduplication. Multiple components sharing the same query key never trigger duplicate requests.
+  </Card>
+  <Card title="Query invalidation" icon="arrows-rotate">
+    Invalidate and refetch related queries when a mutation succeeds. Actively used queries refetch automatically; inactive ones are marked stale.
+  </Card>
+  <Card title="Optimistic updates" icon="bolt">
+    Update your UI instantly before the server responds. Pinia Colada rolls back automatically on failure.
+  </Card>
+  <Card title="SSR support" icon="server">
+    First-class server-side rendering via `onServerPrefetch` — no manual `await` calls needed in your components.
+  </Card>
+  <Card title="Plugin system" icon="puzzle-piece">
+    Extend functionality with official plugins (retry, auto-refetch, delay, cache persistence) or write your own.
+  </Card>
+  <Card title="TypeScript first" icon="code">
+    Full type safety throughout: typed query keys, typed cache access, and typed mutation parameters.
+  </Card>
+  <Card title="Tiny bundle" icon="feather">
+    ~2kb baseline, fully tree-shakeable, and zero dependencies beyond Pinia and Vue.
+  </Card>
+  <Card title="Flexible async" icon="arrows-left-right">
+    Works with any function that returns a Promise: `fetch`, `axios`, `mande`, GraphQL clients, and more.
+  </Card>
+</CardGroup>
+
+## Comparison to other solutions
+
+**vs. plain Pinia**
+
+Pinia handles synchronous and complex state well. For async data, you end up writing the same loading/error/data boilerplate in every store action. Pinia Colada **complements** Pinia by handling all of that automatically. You use both together — Pinia Colada doesn't replace Pinia, it extends it.
+
+**vs. TanStack Query**
+
+Pinia Colada shares similarities with TanStack Query and has adapted some of its APIs to ease migration. The key difference is that Pinia Colada is built specifically for Vue, resulting in a lighter library with tighter integration — including official support for [Vue Data Loaders](https://uvr.esm.is/data-loaders/). If you're familiar with TanStack Query, Pinia Colada will feel intuitive.
+
+**vs. swrv**
+
+swrv emphasizes a stale-while-revalidate strategy as its core primitive. Pinia Colada's core primitive is a flexible cache with configurable staleness — you can achieve the same stale-while-revalidate behavior by adjusting `staleTime`, but you also get full invalidation, optimistic updates, and a plugin system on top.
+
+**vs. Vue Promised**
+
+Vue Promised is a focused, minimal library for handling async states per-component with a `<Promised>` component and `usePromise()` composable. Pinia Colada goes further: it shares data across components via a global cache, deduplicates requests, and provides invalidation and mutation support.
+
+**vs. rstore**
+
+rstore is a higher-level abstraction based on cache normalization, designed as a local-first store. Pinia Colada sits at a lower level — you write explicit invalidation logic rather than normalization plugins.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quick-start">
+    Install Pinia Colada and write your first query and mutation in minutes.
+  </Card>
+  <Card title="Core concepts" icon="book" href="/guide/queries">
+    Learn how queries, mutations, query keys, and cache invalidation work.
+  </Card>
+</CardGroup>

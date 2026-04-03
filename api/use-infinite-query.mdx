@@ -1,0 +1,235 @@
+---
+title: useInfiniteQuery
+description: Fetch and accumulate paginated data into a single reactive list, with built-in support for loading next and previous pages.
+---
+
+Extends `useQuery` to handle paginated data. Each page is fetched sequentially using a page parameter derived from the previous page's result, and all pages are stored together in a single cache entry.
+
+```typescript
+function useInfiniteQuery<TData, TError, TPageParam, TDataInitial>(
+  options: UseInfiniteQueryOptions<TData, TError, TPageParam, TDataInitial>
+): UseInfiniteQueryReturn<TData, TError, TPageParam, TDataInitial>
+```
+
+## Usage
+
+```typescript
+import { useInfiniteQuery } from '@pinia/colada'
+
+const { data, loadNextPage, hasNextPage, isPending } = useInfiniteQuery({
+  key: ['posts'],
+  query: ({ pageParam }) =>
+    fetch(`/api/posts?cursor=${pageParam}`).then((r) => r.json()),
+  initialPageParam: null,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? null,
+})
+```
+
+`data.value` is `{ pages: TData[], pageParams: TPageParam[] }`. Access all fetched pages via `data.value.pages`.
+
+### Cursor-based pagination
+
+```typescript
+interface PostsPage {
+  posts: Post[]
+  nextCursor: string | null
+}
+
+const { data, loadNextPage, hasNextPage } = useInfiniteQuery<PostsPage, Error, string | null>({
+  key: ['posts'],
+  query: async ({ pageParam, signal }) => {
+    const url = pageParam
+      ? `/api/posts?cursor=${pageParam}`
+      : '/api/posts'
+    const res = await fetch(url, { signal })
+    return res.json()
+  },
+  initialPageParam: null,
+  getNextPageParam: (lastPage) => lastPage.nextCursor,
+})
+```
+
+### Offset-based pagination
+
+```typescript
+const { data, loadNextPage, hasNextPage } = useInfiniteQuery({
+  key: ['items'],
+  query: ({ pageParam }) =>
+    fetch(`/api/items?page=${pageParam}`).then((r) => r.json()),
+  initialPageParam: 1,
+  getNextPageParam: (lastPage, allPages, lastPageParam) => {
+    return lastPage.hasMore ? lastPageParam + 1 : undefined
+  },
+})
+```
+
+## Options
+
+`useInfiniteQuery` accepts all options from [`useQuery`](/api/use-query) (except `query`, which has a different signature), plus the following:
+
+<ParamField body="key" type="MaybeRefOrGetter<EntryKey>" required>
+  Cache key for this query. Same behavior as `useQuery`. Use a getter function to make it reactive.
+</ParamField>
+
+<ParamField body="query" type="(context: UseInfiniteQueryFnContext) => Promise<TData>" required>
+  Async function to fetch a single page of data. Receives an extended context with a `pageParam` property.
+
+  <Expandable title="context properties">
+    <ResponseField name="pageParam" type="TPageParam">
+      The page parameter for the current fetch. On the first fetch, this is the value of `initialPageParam`. On subsequent fetches, it is the value returned by `getNextPageParam` or `getPreviousPageParam`.
+    </ResponseField>
+    <ResponseField name="signal" type="AbortSignal">
+      Abort signal for this query call. Pass to `fetch()` to support cancellation.
+    </ResponseField>
+    <ResponseField name="entry" type="UseQueryEntry">
+      The cache entry for this query.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="initialPageParam" type="TPageParam | (() => TPageParam)" required>
+  The page parameter to use for the very first fetch. Can be a static value or a factory function.
+</ParamField>
+
+<ParamField body="getNextPageParam" type="(lastPage, allPages, lastPageParam, allPageParams) => TPageParam | undefined | null" required>
+  Called after every fetch to determine the next page parameter. Return `undefined` or `null` to signal that there are no more pages (`hasNextPage` will be `false`).
+
+  ```typescript
+  // Cursor-based
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? null
+
+  // Offset-based
+  getNextPageParam: (lastPage, allPages, lastPageParam) =>
+    lastPage.hasMore ? lastPageParam + 1 : undefined
+  ```
+</ParamField>
+
+<ParamField body="getPreviousPageParam" type="(firstPage, allPages, firstPageParam, allPageParams) => TPageParam | undefined | null">
+  Called to determine the previous page parameter. Return `undefined` or `null` to signal that there are no previous pages (`hasPreviousPage` will be `false`). Required if you call `loadPreviousPage()`.
+</ParamField>
+
+<ParamField body="maxPages" type="number">
+  Maximum number of pages to keep in the cache. When loading a new page would exceed this limit, the oldest page is removed. Useful for constraining memory usage in long infinite scroll lists.
+</ParamField>
+
+<ParamField body="staleTime" type="number" default="5000">
+  Inherited from `useQuery`. Time in milliseconds before cached pages are considered stale.
+</ParamField>
+
+<ParamField body="gcTime" type="number | false" default="300000">
+  Inherited from `useQuery`. Time in milliseconds before unused cache entries are garbage collected.
+</ParamField>
+
+<ParamField body="enabled" type="MaybeRefOrGetter<boolean>" default="true">
+  Inherited from `useQuery`. When `false`, the query will not run.
+</ParamField>
+
+<ParamField body="refetchOnMount" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Inherited from `useQuery`. When refetching, all pages are re-fetched in sequence using the stored page parameters.
+</ParamField>
+
+<ParamField body="refetchOnWindowFocus" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Inherited from `useQuery`.
+</ParamField>
+
+<ParamField body="refetchOnReconnect" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Inherited from `useQuery`.
+</ParamField>
+
+## Return values
+
+`useInfiniteQuery` returns all values from [`useQuery`](/api/use-query), with the following additions and overrides:
+
+<ResponseField name="data" type="ComputedRef<{ pages: TData[], pageParams: TPageParam[] } | undefined>">
+  All fetched pages and their parameters. `pages` is an ordered array of each page's result. `pageParams` holds the parameter used to fetch the corresponding page.
+
+  ```typescript
+  // Flatten all pages into a single list
+  const allPosts = computed(() => data.value?.pages.flatMap((page) => page.posts) ?? [])
+  ```
+</ResponseField>
+
+<ResponseField name="hasNextPage" type="ShallowRef<boolean>">
+  `true` when `getNextPageParam` returned a non-nullish value for the last page. Use this to conditionally render a "Load more" button.
+</ResponseField>
+
+<ResponseField name="hasPreviousPage" type="ShallowRef<boolean>">
+  `true` when `getPreviousPageParam` returned a non-nullish value for the first page.
+</ResponseField>
+
+<ResponseField name="loadNextPage" type="(options?: UseInfiniteQueryLoadMoreOptions) => Promise<unknown>">
+  Fetches the next page using the parameter returned by `getNextPageParam`. The new page is appended to `data.value.pages`.
+
+  <Expandable title="options">
+    <ResponseField name="throwOnError" type="boolean" default="false">
+      When `true`, the returned promise rejects on failure instead of resolving silently.
+    </ResponseField>
+    <ResponseField name="cancelRefetch" type="boolean" default="true">
+      When `false`, the call is ignored if a fetch is already in progress. When `true` (default), the ongoing fetch is cancelled and a new one starts.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="loadPreviousPage" type="(options?: UseInfiniteQueryLoadMoreOptions) => Promise<unknown>">
+  Fetches the previous page using the parameter returned by `getPreviousPageParam`. The new page is prepended to `data.value.pages`. Requires `getPreviousPageParam` to be defined.
+</ResponseField>
+
+## Complete example
+
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useInfiniteQuery } from '@pinia/colada'
+
+interface Post {
+  id: number
+  title: string
+}
+
+interface PostsPage {
+  posts: Post[]
+  nextCursor: string | null
+}
+
+const {
+  data,
+  isPending,
+  error,
+  hasNextPage,
+  loadNextPage,
+  isLoading,
+} = useInfiniteQuery<PostsPage, Error, string | null>({
+  key: ['posts', 'infinite'],
+  query: async ({ pageParam, signal }) => {
+    const url = pageParam ? `/api/posts?cursor=${pageParam}` : '/api/posts'
+    const res = await fetch(url, { signal })
+    if (!res.ok) throw new Error('Failed to fetch posts')
+    return res.json()
+  },
+  initialPageParam: null,
+  getNextPageParam: (lastPage) => lastPage.nextCursor,
+})
+
+const allPosts = computed(() => data.value?.pages.flatMap((page) => page.posts) ?? [])
+</script>
+
+<template>
+  <div>
+    <p v-if="isPending">Loading…</p>
+    <p v-else-if="error">Error: {{ error.message }}</p>
+
+    <ul v-else>
+      <li v-for="post in allPosts" :key="post.id">{{ post.title }}</li>
+    </ul>
+
+    <button
+      v-if="hasNextPage"
+      :disabled="isLoading"
+      @click="loadNextPage()"
+    >
+      {{ isLoading ? 'Loading more…' : 'Load more' }}
+    </button>
+    <p v-else-if="!isPending">No more posts.</p>
+  </div>
+</template>
+```

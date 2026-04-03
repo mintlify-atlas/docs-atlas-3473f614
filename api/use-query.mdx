@@ -1,0 +1,244 @@
+---
+title: useQuery
+description: Fetch and cache async data in your Vue components with automatic deduplication, background refresh, and reactive state.
+---
+
+Subscribes to a shared query entry in the cache. Multiple components calling `useQuery()` with the same key share the same underlying request and state.
+
+```typescript
+function useQuery<TData, TError, TDataInitial>(
+  options: UseQueryOptions<TData, TError, TDataInitial>
+): UseQueryReturn<TData, TError, TDataInitial>
+```
+
+## Usage
+
+```typescript
+import { useQuery } from '@pinia/colada'
+
+const { data, error, status, refresh } = useQuery({
+  key: ['users'],
+  query: () => fetch('/api/users').then((r) => r.json()),
+})
+```
+
+### Reactive key
+
+Use a getter function for the key when it depends on reactive state. The query automatically re-runs when the key changes.
+
+```typescript
+import { useRoute } from 'vue-router'
+import { useQuery } from '@pinia/colada'
+
+const route = useRoute()
+
+const { data, isPending } = useQuery({
+  key: () => ['users', route.params.id],
+  query: () => fetch(`/api/users/${route.params.id}`).then((r) => r.json()),
+})
+```
+
+### With initial data
+
+```typescript
+const { data } = useQuery({
+  key: ['settings'],
+  query: () => fetchSettings(),
+  initialData: () => ({ theme: 'light', language: 'en' }),
+})
+// data is typed as Settings (never undefined) because initialData is provided
+```
+
+### Placeholder data
+
+```typescript
+const { data, isPlaceholderData } = useQuery({
+  key: ['user', userId],
+  query: () => fetchUser(userId),
+  placeholderData: (previousData) => previousData,
+})
+```
+
+## Options
+
+<ParamField body="key" type="MaybeRefOrGetter<EntryKey>" required>
+  Cache key for this query. Use an array of serializable values. When a getter function is passed, the query re-runs reactively whenever the key changes.
+
+  `EntryKey` is `readonly (string | number | boolean | null | object | array)[]`.
+
+  ```typescript
+  // Static
+  key: ['users']
+
+  // Dynamic (reactive)
+  key: () => ['users', route.params.id]
+  ```
+</ParamField>
+
+<ParamField body="query" type="(context: UseQueryFnContext) => Promise<TData>" required>
+  Async function that fetches the data. Receives a context object.
+
+  <Expandable title="context properties">
+    <ResponseField name="signal" type="AbortSignal">
+      Abort signal tied to this query call. Abort it to cancel the request when a newer call supersedes this one.
+    </ResponseField>
+    <ResponseField name="entry" type="UseQueryEntry">
+      The cache entry associated with this query call.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="staleTime" type="number" default="5000">
+  Time in milliseconds before cached data is considered stale. Stale data is refreshed on the next read. Set to `Infinity` to never consider data stale.
+</ParamField>
+
+<ParamField body="gcTime" type="number | false" default="300000">
+  Time in milliseconds before an unused cache entry is garbage collected. Set to `false` to disable garbage collection. Defaults to 5 minutes.
+</ParamField>
+
+<ParamField body="enabled" type="MaybeRefOrGetter<boolean>" default="true">
+  Whether the query should run. When `false`, the query will not execute until `refetch()` or `refresh()` is called explicitly, or until `enabled` becomes `true`.
+</ParamField>
+
+<ParamField body="initialData" type="() => TDataInitial">
+  Factory function returning the initial data value. Unlike `placeholderData`, setting `initialData` marks the query as `success` and stores the value in the cache.
+</ParamField>
+
+<ParamField body="initialDataUpdatedAt" type="number | (() => number)">
+  Timestamp (in milliseconds) when the initial data was last updated. Used to determine whether the initial data is stale. Defaults to `Date.now()` when `initialData` is set.
+</ParamField>
+
+<ParamField body="placeholderData" type="TData | ((previousData, previousEntry) => TData)">
+  Data shown while the query is loading for the first time. The query `status` appears as `'success'` while placeholder data is displayed. Unlike `initialData`, this does not modify the cache state.
+</ParamField>
+
+<ParamField body="refetchOnMount" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Controls refetching when the component mounts.
+
+  - `true` — refetch if data is stale
+  - `false` — never refetch on mount
+  - `'always'` — always refetch on mount
+</ParamField>
+
+<ParamField body="refetchOnWindowFocus" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Controls refetching when the browser window regains focus.
+
+  - `true` — refetch if data is stale
+  - `false` — never refetch on focus
+  - `'always'` — always refetch on focus
+</ParamField>
+
+<ParamField body="refetchOnReconnect" type="MaybeRefOrGetter<boolean | 'always'>" default="true">
+  Controls refetching when the network reconnects.
+
+  - `true` — refetch if data is stale
+  - `false` — never refetch on reconnect
+  - `'always'` — always refetch on reconnect
+</ParamField>
+
+<ParamField body="ssrCatchError" type="boolean" default="false">
+  Whether to catch errors thrown during SSR (`onServerPrefetch`). When `false`, errors from the query propagate and prevent server rendering from completing.
+</ParamField>
+
+<ParamField body="meta" type="MaybeRefOrGetter<QueryMeta>">
+  Arbitrary metadata to associate with this query entry. Must be JSON-serializable for SSR compatibility. Accessible via `entry.meta` in plugins.
+</ParamField>
+
+## Return values
+
+<ResponseField name="data" type="ComputedRef<TData | TDataInitial>">
+  The last successfully resolved data. Alias for `state.value.data`. `undefined` until the first successful fetch, unless `initialData` or `placeholderData` is provided.
+</ResponseField>
+
+<ResponseField name="error" type="ComputedRef<TError | null>">
+  The error thrown by the most recent failed fetch. `null` when the query succeeded or has not been called yet.
+</ResponseField>
+
+<ResponseField name="status" type="ComputedRef<'pending' | 'success' | 'error'>">
+  The current status of the query data.
+
+  - `'pending'` — no data yet (initial state)
+  - `'success'` — data is available
+  - `'error'` — the last fetch failed
+</ResponseField>
+
+<ResponseField name="asyncStatus" type="ComputedRef<'idle' | 'loading'>">
+  Whether the query is actively fetching. `'loading'` while a request is in flight, `'idle'` otherwise. Independent from `status` — a query can be `status: 'success'` and `asyncStatus: 'loading'` simultaneously during a background refresh.
+</ResponseField>
+
+<ResponseField name="isPending" type="ComputedRef<boolean>">
+  `true` when `status === 'pending'`. Shorthand for checking whether the query has resolved at least once.
+</ResponseField>
+
+<ResponseField name="isLoading" type="ShallowRef<boolean>">
+  `true` when `asyncStatus === 'loading'`. Shorthand for checking whether a fetch is currently in flight.
+</ResponseField>
+
+<ResponseField name="isPlaceholderData" type="ComputedRef<boolean>">
+  `true` when the currently displayed `data` is the `placeholderData` and the real data has not yet loaded.
+</ResponseField>
+
+<ResponseField name="state" type="ComputedRef<DataState<TData, TError, TDataInitial>>">
+  Combined state object containing `data`, `error`, and `status`. Supports type narrowing based on `status`.
+
+  <Expandable title="DataState variants">
+    <ResponseField name="status: 'success'" type="object">
+      `{ status: 'success', data: TData, error: null }`
+    </ResponseField>
+    <ResponseField name="status: 'error'" type="object">
+      `{ status: 'error', data: TData | undefined, error: TError }`
+    </ResponseField>
+    <ResponseField name="status: 'pending'" type="object">
+      `{ status: 'pending', data: TDataInitial, error: null }`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="refresh" type="(throwOnError?: boolean) => Promise<DataState>">
+  Refreshes the query if data is stale or in an error state. If data is still fresh, returns the current state without triggering a new request. Pass `true` to `throwOnError` to reject the promise on failure instead of returning the error state.
+</ResponseField>
+
+<ResponseField name="refetch" type="(throwOnError?: boolean) => Promise<DataState>">
+  Forces a new fetch regardless of whether data is fresh. Useful for manual user-triggered refreshes. Pass `true` to `throwOnError` to reject the promise on failure.
+</ResponseField>
+
+## Complete example
+
+```vue
+<script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+const { data, error, isPending, isLoading, refetch } = useQuery<User[]>({
+  key: ['users'],
+  query: async ({ signal }) => {
+    const res = await fetch('/api/users', { signal })
+    if (!res.ok) throw new Error('Failed to fetch users')
+    return res.json()
+  },
+  staleTime: 30_000,
+  refetchOnWindowFocus: true,
+})
+</script>
+
+<template>
+  <div>
+    <button :disabled="isLoading" @click="refetch()">
+      {{ isLoading ? 'Loading…' : 'Refresh' }}
+    </button>
+
+    <p v-if="isPending">Loading users…</p>
+    <p v-else-if="error">Error: {{ error.message }}</p>
+    <ul v-else>
+      <li v-for="user in data" :key="user.id">
+        {{ user.name }} — {{ user.email }}
+      </li>
+    </ul>
+  </div>
+</template>
+```

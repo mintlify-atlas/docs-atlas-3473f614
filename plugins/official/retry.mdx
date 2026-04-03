@@ -1,0 +1,163 @@
+---
+title: Retry
+description: Automatically retry failed query fetches with configurable attempt counts, delays, and custom retry conditions.
+---
+
+`@pinia/colada-plugin-retry` retries failed **query** fetches automatically. When a query throws an error, the plugin schedules a retry according to your configuration and exposes reactive retry state on the query return value.
+
+## Installation
+
+```bash
+npm install @pinia/colada-plugin-retry
+```
+
+## Setup
+
+Import `PiniaColadaRetry` and add it to the `plugins` array:
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaRetry } from '@pinia/colada-plugin-retry'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaRetry({
+      retry: 3,
+      // delay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
+    }),
+  ],
+})
+```
+
+## Configuration
+
+The `retry` and `delay` options are available both globally (plugin options) and per query. Per-query values override the global defaults.
+
+### retry
+
+Controls how many times (and whether) a failed query is retried.
+
+<AccordionGroup>
+  <Accordion title="retry: false or 0">
+    Disables retries entirely.
+
+    ```ts
+    PiniaColadaRetry({ retry: 0 })
+    ```
+  </Accordion>
+  <Accordion title="retry: number">
+    Retries the query up to that many times. The built-in default retries up to 2 times (using exponential backoff).
+
+    ```ts
+    PiniaColadaRetry({ retry: 3 })
+    ```
+  </Accordion>
+  <Accordion title="retry: (failureCount, error) => boolean">
+    Custom function called after each failure. Return `true` to retry or `false` to stop.
+
+    ```ts
+    PiniaColadaRetry({
+      retry: (failureCount, error) => {
+        // stop after 2 failures or for client errors
+        return failureCount < 2 && shouldRetry(error)
+      },
+    })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### delay
+
+Controls the wait time between retry attempts. Defaults to exponential backoff: `2^attempt * 1000ms`, capped at 30 seconds.
+
+<AccordionGroup>
+  <Accordion title="delay: number">
+    Fixed delay in milliseconds between all attempts.
+
+    ```ts
+    PiniaColadaRetry({ delay: 2000 }) // wait 2 seconds between retries
+    ```
+  </Accordion>
+  <Accordion title="delay: (attempt) => number">
+    Function receiving the attempt index (starting at `0`) that returns the delay in milliseconds.
+
+    ```ts
+    PiniaColadaRetry({
+      delay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
+    })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Retry state extensions
+
+When this plugin is installed, `useQuery()` returns three additional reactive refs:
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `isRetrying` | `ShallowRef<boolean>` | `true` while a retry is pending |
+| `retryCount` | `ShallowRef<number>` | Number of retries scheduled so far. Resets on success or manual refetch. |
+| `retryError` | `ShallowRef<TError \| null>` | The error that triggered the current retry. `null` when not retrying. |
+
+```vue
+<script setup lang="ts">
+const { data, isRetrying, retryCount, retryError } = useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+})
+</script>
+
+<template>
+  <p v-if="isRetrying">Retrying... (attempt {{ retryCount }})</p>
+  <p v-if="retryError">Last error: {{ retryError.message }}</p>
+  <ul v-else>
+    <li v-for="todo in data" :key="todo.id">{{ todo.title }}</li>
+  </ul>
+</template>
+```
+
+## Usage examples
+
+### Global defaults with custom backoff
+
+```ts main.ts
+import { PiniaColada } from '@pinia/colada'
+import { PiniaColadaRetry } from '@pinia/colada-plugin-retry'
+
+app.use(PiniaColada, {
+  plugins: [
+    PiniaColadaRetry({
+      retry: 3,
+      delay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
+    }),
+  ],
+})
+```
+
+### Disable retries per query
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+  retry: 0,
+})
+```
+
+### Custom retry condition
+
+```ts
+useQuery({
+  key: ['todos'],
+  query: fetchTodos,
+  retry: (failureCount, error) => {
+    // retry network errors up to 2 times, but never retry 4xx responses
+    return failureCount < 2 && shouldRetry(error)
+  },
+})
+```
+
+<Note>
+  Retries stop automatically if the query becomes inactive or disabled while a retry is pending.
+  If you trigger multiple fetches quickly, the plugin avoids retrying outdated work.
+</Note>
